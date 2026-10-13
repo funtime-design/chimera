@@ -6,6 +6,10 @@
 //   pnpm run setup [-- --deployment <id>] [--resume] [--answers <file.json>] [--yes]
 //   pnpm run setup -- --prereqs     step 0 only: the checklist of what this machine needs
 //   pnpm run setup -- --detect      what setup can find out by itself, as JSON (bin/setup-detect.mjs)
+//   pnpm run setup -- --token-steps the 6 numbered steps to create the master token in the Cloudflare dashboard
+//
+// Text the person must see word for word sits between a "--- show this ---" line and a "--- end ---" line; the
+// chimera-setup skill relays those blocks verbatim (prerequisites, pauses, needs-answer lists, status checklists).
 //
 // A new setup starts with step 0 (prerequisites) and stops on the first missing one. Then it detects what it can
 // (Cloudflare account, domains, git email as the first admin, defaults); --answers wins over detection, and on a
@@ -33,6 +37,18 @@ const PERSON = /^[a-z0-9][a-z0-9_]*$/;
 const PLACEHOLDER = 'REPLACE_ME';
 
 export class Pause extends Error {}
+
+export const SHOW = '--- show this ---', SHOW_END = '--- end ---';
+const shown = text => `${SHOW}\n${text}\n${SHOW_END}`;
+// The one place the master-token walkthrough lives; --token-steps prints it, the skill's "Show me the steps again" runs it.
+export const TOKEN_STEPS = [
+  '1. Open https://dash.cloudflare.com/profile/api-tokens (Cloudflare dashboard > My Profile > API Tokens).',
+  '2. Click Create Token, then Create Custom Token > Get started.',
+  '3. Give it a name, such as "chimera master", and add one permission: Account / API Tokens / Edit. Nothing else.',
+  '4. Under TTL, set the end date one year from today.',
+  '5. Click Continue to summary, then Create Token.',
+  '6. Copy the token into your password manager now (Cloudflare shows it once), then run pnpm secrets:mint -- --deployment <id> in your own terminal and paste it at the hidden prompt.',
+];
 
 // What a person must answer; everything else is derived. Messages never echo an email or the account ID.
 export function checkAnswers(a) {
@@ -134,7 +150,8 @@ export async function setup({
   try {
     const opts = parseArgs(argv);
     if (opts.detect) { out(JSON.stringify(publicView(await detector({ answers: {} })), null, 2)); return 0; }
-    if (opts.prereqs) { const list = prereqs(await detector({ answers: {} })); say(formatPrereqs(list)); return prereqsOk(list) ? 0 : 2; }
+    if (opts.tokenSteps) { say(shown(['Create the master token:', ...TOKEN_STEPS].join('\n'))); return 0; }
+    if (opts.prereqs) { const list = prereqs(await detector({ answers: {} })); say(shown(formatPrereqs(list))); return prereqsOk(list) ? 0 : 2; }
     let answers = null;
     if (opts.answers) {
       try { answers = JSON.parse(await readFile(path.resolve(opts.answers), 'utf8')); } catch { throw new Error('--answers: file missing or not valid JSON (contents not shown)'); }
@@ -153,14 +170,14 @@ export async function setup({
       const report = await detector({ answers: given });
       for (const a of report.fields.accounts.value ?? []) hide(a.id);
       const list = prereqs(report);
-      say(formatPrereqs(list));
+      say(shown(formatPrereqs(list)));
       if (!prereqsOk(list)) return 2;
       let merged = mergeAnswers(given, report);
       if (isTTY && (!answers || merged.missing.length)) merged = mergeAnswers(await questionnaire(question, say, report, given), report);
       if (merged.missing.length) {
-        say(`Setup needs a person to answer these first (needs-answer): ${merged.missing.join(', ')}`);
-        for (const key of merged.missing) say(`  - ${key}: ${howToGet(report, key)}`);
-        say('Add them to the answers file and run: pnpm run setup -- --answers <file.json>');
+        say(shown([`Setup needs a person to answer these first (needs-answer): ${merged.missing.join(', ')}`,
+          ...merged.missing.map(key => `  - ${key}: ${howToGet(report, key)}`),
+          'Add them to the answers file and run: pnpm run setup -- --answers <file.json>'].join('\n')));
         return 2;
       }
       answers = merged.answers;
@@ -174,7 +191,7 @@ export async function setup({
     const file = path.join(root, STATE_DIR, `${deployment}.json`);
     state ??= { deployment, access: answers ? accessOf(answers).enabled : null, steps: {} };
     if (answers) state.github = answers.githubActions !== false;
-    if (opts.resume) say(status(state, `Where setup stands for ${deployment}:`));
+    if (opts.resume) say(shown(status(state, `Where setup stands for ${deployment}:`)));
     if (answers) { state.access = accessOf(answers).enabled; if (accessOf(answers).groupId) state.accessGroup = String(accessOf(answers).groupId); }
     const save = async () => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, `${JSON.stringify(state, null, 2)}\n`); };
     const mark = async (step, status, note) => { state.steps[step] = { status, at: new Date().toISOString(), ...(note ? { note } : {}) }; await save(); };
@@ -233,11 +250,11 @@ export async function setup({
           const todo = unfilled(secrets);
           if (todo.length) {
             await mark(step, 'todo', `fill: ${todo.join(', ')}`);
-            say(`  Result: waiting for the tokens (${todo.join(', ')}).`);
-            say(`  Next: run pnpm secrets:mint -- --deployment ${deployment} in your own terminal. It asks for the one master token (typing stays hidden) and makes every other token.`);
-            say('  The master token: https://dash.cloudflare.com/profile/api-tokens > Create Token > Create Custom Token > permission Account / API Tokens / Edit, nothing else, TTL 1 year.');
-            say(`  Already hold the values? pnpm secrets:fill -- --deployment ${deployment} enters them instead.`);
-            say(`  Then: pnpm run setup -- --deployment ${deployment} --resume`);
+            say(shown([`  Result: waiting for the tokens (${todo.join(', ')}).`,
+              `  Next: run pnpm secrets:mint -- --deployment ${deployment} in your own terminal. It asks for the one master token (typing stays hidden) and makes every other token.`,
+              '  The master token: https://dash.cloudflare.com/profile/api-tokens > Create Token > Create Custom Token > permission Account / API Tokens / Edit, nothing else, TTL 1 year.',
+              `  Already hold the values? pnpm secrets:fill -- --deployment ${deployment} enters them instead.`,
+              `  Then: pnpm run setup -- --deployment ${deployment} --resume`].join('\n')));
             paused = 'secrets'; break;
           }
           await mark(step, 'done');
@@ -301,11 +318,11 @@ export async function setup({
         throw error;
       }
     }
-    say(status(state));
+    say(shown(status(state)));
     if (paused) return 2;
     return 0;
   } catch (error) {
-    if (error instanceof Pause) { say(error.message); return 2; }
+    if (error instanceof Pause) { say(shown(error.message)); return 2; }
     warn(`setup: ${error.message}`);
     return 1;
   } finally {
@@ -402,7 +419,8 @@ function parseArgs(argv) {
     else if (a === '--yes') o.yes = true;
     else if (a === '--detect') o.detect = true;
     else if (a === '--prereqs') o.prereqs = true;
-    else throw new Error(`unsupported option ${JSON.stringify(a)}; use --deployment <id>, --answers <file.json>, --resume, --yes, --prereqs, --detect`);
+    else if (a === '--token-steps') o.tokenSteps = true;
+    else throw new Error(`unsupported option ${JSON.stringify(a)}; use --deployment <id>, --answers <file.json>, --resume, --yes, --prereqs, --detect, --token-steps`);
   }
   if (o.deployment !== undefined && (!ID.test(o.deployment) || o.deployment === 'all')) throw new Error('invalid --deployment id');
   if ('answers' in o && !o.answers) throw new Error('--answers needs a file');

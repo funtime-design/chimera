@@ -3,6 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const skill = await readFile(new URL('../.claude/skills/chimera-setup/SKILL.md', import.meta.url), 'utf8');
 const blocks = skill.split(/^### /m).slice(1).filter(b => /^Q\d+\b/.test(b));
@@ -47,4 +49,32 @@ test('banned: a numbered list with more than 3 question lines in a row, a 32-hex
   assert.doesNotMatch(skill, /fill (them|those|it) (in|into)[^\n]*yourself/i);
   assert.doesNotMatch(skill, /The person fills those into/);
   assert.match(skill, /[Nn]ever ask for (a|the) token in (the )?chat/);
+});
+
+test('display is mandatory: a verbatim-relay rule at the top, show markers, and a "Do not" list', () => {
+  const rule = skill.indexOf('## What the user must see');
+  assert.ok(rule > 0 && rule < skill.indexOf('## Step 0'), 'the rule comes before Step 0');
+  assert.match(skill, /--- show this ---/);
+  assert.match(skill, /--- end ---/);
+  assert.match(skill, /verbatim/i);
+  assert.match(skill, /never summari[sz]e/i);
+  const dont = skill.slice(skill.indexOf('## Do not'));
+  assert.ok(skill.includes('## Do not'), 'has a Do not section');
+  for (const ban of [/merge several steps into one sentence/i, /everything is in place/i, /paraphrase an instruction that contains a URL or a command/i, /answer a question for the user/i]) assert.match(dont, ban);
+});
+
+test('"Show me the steps again" prints the token steps as their own message, then re-asks', () => {
+  assert.match(skill, /pnpm run setup -- --token-steps/);
+  assert.match(skill, /- \*\*Show me the steps again\*\*: prints the 6 steps/);
+  assert.match(skill, /re-ask|ask the same question again/i);
+});
+
+test('--token-steps prints 6 numbered steps with the dashboard URL', () => {
+  const out = execFileSync(process.execPath, [fileURLToPath(new URL('../bin/setup.mjs', import.meta.url)), '--token-steps'], { encoding: 'utf8' });
+  const numbered = out.split('\n').filter(l => /^\d+\. /.test(l));
+  assert.equal(numbered.length, 6, out);
+  assert.deepEqual(numbered.map(l => l.split('.')[0]), ['1', '2', '3', '4', '5', '6']);
+  assert.ok(numbered.some(l => l.includes('https://dash.cloudflare.com/profile/api-tokens')), out);
+  assert.match(out, /^--- show this ---$/m);
+  assert.match(out, /^--- end ---$/m);
 });

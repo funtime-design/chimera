@@ -356,3 +356,26 @@ test('--detect prints JSON with the account masked; detection fills a workers.de
   assert.ok(calls.includes('npx') && !calls.includes('gh'), 'Worker secrets pushed, no gh call without gh');
   noSecrets(d.text + r.text + resumed.text, 'detect flow');
 });
+
+test('--prereqs wraps the whole checklist in show markers, every line included, even when all pass', async t => {
+  const root = await sandbox(t);
+  const fine = await runSetup(root, ['--prereqs']);
+  assert.equal(fine.code, 0, fine.text);
+  const lines = fine.text.split('\n');
+  const start = lines.indexOf('--- show this ---'), end = lines.indexOf('--- end ---');
+  assert.ok(start >= 0 && end > start, `show markers around the checklist:\n${fine.text}`);
+  const block = lines.slice(start + 1, end);
+  assert.match(block[0], /Step 0: checking what you have/);
+  assert.ok(block.filter(l => /^\s+✓ /.test(l)).length >= 3, 'every passing line is in the block, with its tick');
+  assert.match(block.at(-1), /All set/);
+  const failing = await runSetup(root, ['--prereqs'], { detector: detector({ loggedIn: false }) });
+  assert.equal(failing.code, 2);
+  assert.match(failing.text, /--- show this ---\n[\s\S]*✗ wrangler logged in[\s\S]*Next: [\s\S]*\n--- end ---/);
+});
+
+test('a token pause shows the waiting line and the exact commands inside show markers', async t => {
+  const root = await sandbox(t);
+  const r = await runSetup(root, ['--answers', await answersFile(root, { deployment: 'acme', displayName: 'Acme', admins: [{ name: 'alice', email: EMAIL.alice }], origin: 'workers.dev', access: false })]);
+  assert.equal(r.code, 2, r.text);
+  assert.match(r.text, /--- show this ---\n\s*Result: waiting for the tokens[\s\S]*pnpm secrets:mint -- --deployment acme[\s\S]*https:\/\/dash\.cloudflare\.com\/profile\/api-tokens[\s\S]*--resume\n--- end ---/);
+});
