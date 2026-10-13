@@ -130,6 +130,18 @@
         "additionalProperties": false
       }
     },
+    "admins": {
+      "description": "People (member names, no dash) who may open the admin pages /docs/status and /docs/settings.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_]*$",
+        "not": {
+          "const": "all"
+        }
+      }
+    },
     "auth": {
       "type": "object",
       "properties": {
@@ -520,13 +532,26 @@
     "hooks": {
       "type": "object",
       "properties": {
+        "approvers": {
+          "description": "People whose \"approve\" reply lets one destructive command run.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_]*$",
+            "not": {
+              "const": "all"
+            }
+          }
+        },
         "approver": {
           "type": "string",
           "minLength": 1,
           "pattern": "^[a-z0-9][a-z0-9_-]*$",
           "not": {
             "const": "all"
-          }
+          },
+          "description": "Deprecated single-name form of approvers, still read; never set both."
         },
         "protectedBranches": {
           "type": "array",
@@ -574,7 +599,6 @@
         }
       },
       "required": [
-        "approver",
         "protectedBranches",
         "enabled",
         "externalSkills"

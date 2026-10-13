@@ -8,6 +8,7 @@ import { checkWarmClaim } from "./warm";
 import { household, memberFor, people, personFor, personOf } from "./roster";
 import { BridgeError, checkBrief, checkDue, checkLabels, checkPriority, checkUrl, optText, requiredText, stateOf } from "./validate";
 import { assertAllowed } from "./permissions";
+import { callerPermissions } from "./trust";
 import { CLOUD_PARENT_CLAIM, isCloud, isCloudParent, refusal, rolesOf, rollupEpic, rollupOf, SYSTEM_LABELS, taskEvent, transition, writeTask } from "./state";
 
 const CLOSED_STATES = ["done", "dropped"];
@@ -188,7 +189,11 @@ export function changeTask(sql: SqlStorage, waiters: Waiters, caller: string, me
   if (input.expected_version !== undefined && input.expected_version !== task.version) {
     throw new BridgeError(`${task.key} is at version ${task.version}, not ${input.expected_version}: someone changed it. Read it again with task_get and retry.`);
   }
-  assertAllowed(task, caller, rolesOf(caller, task, members), input, members);
+  // Device permissions (hub/trust.ts): may_act_as_person or may_edit_tasks off drops the owner role; may_edit_tasks on
+  // widens a cloud session's edits (assertAllowed).
+  const perms = callerPermissions(sql, caller);
+  const roles = rolesOf(caller, task, members).filter((r) => r !== "owner" || (perms.actAsPerson !== false && perms.editTasks !== false));
+  assertAllowed(task, caller, roles, input, members, perms);
   const next: Record<string, unknown> = {};
   const set = (field: keyof Task, value: unknown) => {
     if (value !== task[field]) next[field] = value;
@@ -202,7 +207,7 @@ export function changeTask(sql: SqlStorage, waiters: Waiters, caller: string, me
   if (input.branch !== undefined) set("branch", optText(input.branch, 200, "branch"));
   if (input.pr_url !== undefined) set("pr_url", checkUrl(input.pr_url));
   if (input.due !== undefined) set("due", checkDue(input.due));
-  const by = rolesOf(caller, task, members);
+  const by = roles;
   const bridge = by.includes("github") || by.includes("system");
   // T-53: which epic a task belongs to, and whether a task is an epic, are the owner's calls.
   if (input.parent !== undefined || input.kind !== undefined) epicEdit(sql, task, input, by, set);

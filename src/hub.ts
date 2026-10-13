@@ -36,7 +36,8 @@ export type { GithubEvent, WebhookResult, ReviewRequest } from "./hub/github";
 export type { RevertInput } from "./hub/revert";
 export type { KillResult } from "./hub/kill";
 export type { StampInput, StampResult } from "./hub/stamp";
-export type { TrustMode, TrustResult, TrustRow } from "./hub/trust";
+export type { TrustMode, TrustResult, TrustRow, Permission, PermissionRow, PermissionValue } from "./hub/trust";
+export { PERMISSIONS } from "./hub/trust";
 export type { ClaimRecord, Faults, Fire } from "./hub/faults";
 export type { ErrorLogged } from "./hub/events";
 export type { EndedLane } from "./hub/sessions";
@@ -66,7 +67,7 @@ export class Hub extends DurableObject {
     initSchema(this.sql, (fn) => ctx.storage.transactionSync(fn));
     devices.initDevices(this.sql);
     registered.initRegistered(this.sql);
-    trust.initTrust(this.sql);
+    trust.initTrust(this.sql, (fn) => ctx.storage.transactionSync(fn));
     faults.initFaults(this.sql);
     github.initGithub(this.sql);
     killing.initKill(this.sql);
@@ -192,6 +193,25 @@ export class Hub extends DurableObject {
 
   trustRows(devices: string[]): trust.TrustRow[] {
     return trust.trustRows(this.sql, devices);
+  }
+
+  // /docs/settings: one permission toggle on one device (admins only; hub/trust.ts).
+  setPermission(caller: string, members: string[], admins: string[], device: string, permission: string, value: string, person?: string): { changed: boolean } {
+    return trust.setPermission(this.sql, caller, members, admins, device, permission, value, person);
+  }
+
+  permissionRows(devices: string[]): trust.PermissionRow[] {
+    return trust.permissionRows(this.sql, devices);
+  }
+
+  // A post-deploy contract check that passed (bin/contract-check.mjs), recorded for /docs/status.
+  recordContractCheck(member: string, engine: string): void {
+    events.appendEvent(this.sql, "deployment", "contract", member, "contract_checked", { engine: String(engine).slice(0, 40) });
+  }
+
+  // What /docs/status reports from the Hub: registered devices and the last recorded contract check.
+  setupStatus(): { devices_registered: number; last_contract_check: string | null } {
+    return { devices_registered: registered.registeredDevices(this.sql).length, last_contract_check: events.lastEvent(this.sql, "deployment", "contract_checked")?.at ?? null };
   }
 
   send(sender: string, members: string[], input: SendInput): Message {

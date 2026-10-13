@@ -223,3 +223,24 @@ test('R2 generation writes account ID only under ignored output and preserves lo
   await writeFile(path.join(root, '.gitignore'), 'deployments/*/secrets.json\n');
   await assert.rejects(writeWrangler({ root, deployment: 'example', accountId: '0'.repeat(32) }), /ignored/);
 });
+
+test('bridge roles: admins and approvers are people without a dash; the old hooks.approver key is still read', async () => {
+  const { validateConfig, approversOf, adminsOf } = await loadModule('src/config/schema.ts');
+  const c = await config();
+  assert.deepEqual(approversOf(validateConfig(c)), ['alice']);
+  assert.deepEqual(adminsOf(validateConfig(c)), ['alice']);
+  const old = structuredClone(c); delete old.hooks.approvers; old.hooks.approver = 'alice';
+  assert.deepEqual(approversOf(validateConfig(old)), ['alice'], 'compatibility read of hooks.approver');
+  const both = structuredClone(c); both.hooks.approver = 'alice';
+  assert.throws(() => validateConfig(both), /approvers.*not both/);
+  const none = structuredClone(c); delete none.hooks.approvers;
+  assert.throws(() => validateConfig(none), /config\.hooks\.approvers: required/);
+  const dashed = structuredClone(c); dashed.members.push({ name: 'bob-smith', kind: 'person' });
+  assert.throws(() => validateConfig(dashed), /person names must not contain a dash/);
+  const notPerson = structuredClone(c); notPerson.admins = ['bob'];
+  assert.throws(() => validateConfig(notPerson), /config\.admins: .*person in members/);
+  const device = structuredClone(c); device.hooks.approvers = ['alice-cloud'];
+  assert.throws(() => validateConfig(device), /config\.hooks\.approvers|must match/);
+  const noAdmins = structuredClone(c); delete noAdmins.admins;
+  assert.deepEqual(adminsOf(validateConfig(noAdmins)), [], 'no admins: nobody opens the admin pages');
+});

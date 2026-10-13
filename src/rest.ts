@@ -19,6 +19,12 @@ export async function handleRest(request: Request, url: URL, hub: DurableObjectS
     try { hubVersion = await hub.version(); } catch { /* contract checker permits one recovery deploy */ }
     return json({ worker: versionInfo(env.CF_VERSION_METADATA), hub: hubVersion });
   }
+  // bin/contract-check.mjs records a passed post-deploy check here; /docs/status reports the last one.
+  if (request.method === "POST" && path === "/v1/contract-check") {
+    const engine = (await readJson(request)).engine;
+    await hub.recordContractCheck(member, typeof engine === "string" ? engine : "");
+    return json({ recorded: true });
+  }
   if (request.method === "GET" && path === "/v1/me") {
     // `members` stays the people (and standalone members); devices are listed under their person.
     const { people, devices } = groupRoster(members);

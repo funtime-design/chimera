@@ -29,6 +29,8 @@ export async function checkContract({ origin, token, expectedEngine, fetchImpl =
   if (!record(faults) || !Array.isArray(faults.errors) || !Array.isArray(faults.work_threads)) throw new Error('contract /v1/faults: errors and work_threads must be arrays');
   const mcp = await get('/mcp', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
   if (mcp?.jsonrpc !== '2.0' || mcp.id !== 1 || mcp.error || !Array.isArray(mcp.result?.tools) || !['task_report', 'bridge_faults'].every(name => mcp.result.tools.some(t => t?.name === name))) throw new Error('contract MCP tools/list: required tools missing');
+  // Every check passed: record it for /docs/status. Best effort, so an older Worker without the route still passes.
+  try { await get('/v1/contract-check', { engine: version.worker.engine }); } catch {}
   return version;
 }
 

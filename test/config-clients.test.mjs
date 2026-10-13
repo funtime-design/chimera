@@ -47,6 +47,33 @@ test('approval hook uses configured approver and protected branches, with no bri
   assert.doesNotMatch(out.result.reason, brandingPattern());
 });
 
+test('approval hook asks every approver in one thread and takes any one reply; the old approver key still works', async t => {
+  const { env } = sandbox(t);
+  const run = (bridgeJson, threads) => {
+    writeFileSync(env.BRIDGE_CONFIG, JSON.stringify({ url: 'https://example.com', ...bridgeJson }));
+    const code = `import {decide} from './.claude/hooks/approval.mjs';
+      const sent = []; const threads = ${JSON.stringify(threads)};
+      const result = decide('git push origin main', 'push to main', '.', (method,path,body) => {
+        if(path === '/v1/me') return {member:'alice-cloud'};
+        if(path.startsWith('/v1/threads?')) return threads.map(t => t.summary);
+        if(path.startsWith('/v1/threads/')) return threads[0].messages;
+        sent.push(body); return {thread_id:7};
+      });
+      console.log(JSON.stringify({sent,result}));`;
+    return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', code], { cwd: root, env, encoding: 'utf8' }));
+  };
+  const asked = run({ approvers: ['alice', 'bob'] }, []);
+  assert.deepEqual(asked.sent.map(b => [b.to, b.thread_id ?? null]), [['alice', null], ['bob', 7]]);
+  assert.equal(asked.result.decision, 'deny');
+  const request = asked.sent[0].body;
+  const thread = [{ summary: { subject: asked.sent[0].subject, started_by: 'alice-cloud', thread_id: 7 }, messages: [{ sender: 'alice-cloud', body: request }, { sender: 'bob', body: 'approve' }] }];
+  const approved = run({ approvers: ['alice', 'bob'] }, thread);
+  assert.equal(approved.result.decision, 'allow');
+  assert.deepEqual(approved.sent.map(b => b.to), ['bob'], 'used is posted to the approver who approved');
+  assert.equal(run({ approver: 'bob' }, thread).result.decision, 'allow', 'old single approver key');
+  assert.equal(run({ approvers: ['alice'] }, thread).result.decision, 'deny', 'a reply from someone who is not an approver does not count');
+});
+
 test('shell hooks read URL, header names and token reference from bridge.json without eval', async t => {
   const { env } = sandbox(t);
   const { clientConfig } = await loadModule('src/config/client.ts');

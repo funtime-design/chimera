@@ -56,6 +56,9 @@
       "person": "bob"
     }
   ],
+  "admins": [
+    "alice"
+  ],
   "auth": {
     "staticTokensSecret": {
       "env": "TEST_TOKENS"
@@ -83,7 +86,9 @@
     "stateDirName": ".chimera"
   },
   "hooks": {
-    "approver": "alice",
+    "approvers": [
+      "alice"
+    ],
     "protectedBranches": [
       "main"
     ],

@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gunwadev/chimera.git"
+    "url": "git+https://github.com/funtime-design/chimera.git"
   },
   "type": "module",
   "scripts": {
@@ -19,7 +19,8 @@
     "secrets:push": "node bin/secrets-push.mjs",
     "gen:wrangler": "node bin/gen-wrangler.mjs",
     "validate:deployment": "node bin/validate-deployment.mjs",
-    "contract:check": "node bin/contract-check.mjs"
+    "contract:check": "node bin/contract-check.mjs",
+    "setup": "node bin/setup.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261004.1",

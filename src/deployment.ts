@@ -2,11 +2,13 @@ import { DEFAULT_BRANCH_PREFIX } from "./config/defaults";
 import { claimSeconds, claimLeaseSeconds, bootSeconds, deploySeconds, onlineSeconds, statusExpirySeconds, MAX_WAIT_SECONDS, REACHABLE_IDLE_SECONDS, HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_IDLE_SECONDS, WARM_MAX_AGE_MS, DELIVERY_KEEP_MS, SESSION_TTL_MS, WORK_THREAD_KEEP_MS } from "./hub/settings.ts";
 import { cloudMember } from "./config/names";
 import { resolveConfig, type Config } from "./config/resolve";
+import { adminsOf, approversOf } from "./config/schema";
 
 // Presentation uses engine timing defaults (the guide's existing contract), while runtime settings
 // come from config + env. No secret values are copied into text or client bundles.
 export function deploymentText(c: Config) {
-  const owner = c.presentation?.owner ?? c.hooks.approver;
+  // Guide examples name the first admin (or approver); presentation.owner overrides. Text only, not a role.
+  const owner = c.presentation?.owner ?? adminsOf(c)[0] ?? approversOf(c)[0] ?? "admin";
   return {
     name: c.deployment.productName,
     owner,

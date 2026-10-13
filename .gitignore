@@ -12,6 +12,9 @@ node_modules/
 # Private inputs used only by bin/secrets-push.mjs.
 deployments/*/secrets.json
 
+# pnpm run setup progress (bin/setup.mjs): step names and times only, no secrets.
+.chimera-setup/
+
 # Account-bearing generated deployment config; never include in backups through git.
 .generated/
 
@@ -21,3 +24,4 @@ deployments/*/secrets.json
 # The configured checkout copy of the responder; only the committed asset alias is tracked. Rebuild with pnpm build:responder.
 /bin/*-responder.mjs
 !/bin/goonbridge-responder.mjs
+!/bin/build-responder.mjs

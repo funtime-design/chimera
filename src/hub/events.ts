@@ -6,7 +6,8 @@ import { BridgeError } from "./validate.ts";
 // it; views (task_get, bridge_faults, bridge_sessions) read those columns or the events, and never write.
 // task_events, the old per-task log, is now a view over the task rows of `events`.
 
-export type SubjectKind = "task" | "session" | "fire" | "error";
+// "device": permission changes (hub/trust.ts); "deployment": recorded post-deploy contract checks.
+export type SubjectKind = "task" | "session" | "fire" | "error" | "device" | "deployment";
 export type EventRow = { id: number; at: string; subject_kind: SubjectKind; subject_id: string; actor: string; kind: string; data: Record<string, unknown> };
 
 const MAX_ERROR_TEXT = 500;
@@ -182,4 +183,10 @@ export function parseObject(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+// The newest event of one kind on one subject kind, or null: e.g. the last recorded contract check.
+export function lastEvent(sql: SqlStorage, subject: SubjectKind, kind: string): EventRow | null {
+  const row = sql.exec<Omit<EventRow, "data"> & { data: string }>("SELECT * FROM events WHERE subject_kind = ? AND kind = ? ORDER BY id DESC LIMIT 1", subject, kind).toArray()[0];
+  return row ? { ...row, data: parseObject(row.data) } : null;
 }

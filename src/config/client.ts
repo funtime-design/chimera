@@ -1,6 +1,6 @@
 import { DEFAULT_BRANCH_PREFIX } from "./defaults";
 import { bundledConfig } from './resolve';
-import type { BridgeConfig } from './schema';
+import { approversOf, type BridgeConfig } from './schema';
 
 // Explicit allow-list for public installers and local bridge.json. Never accept a resolved Config:
 // credentials, email maps, account identifiers and routine values do not belong in client artifacts.
@@ -10,7 +10,7 @@ export function clientConfig(c: BridgeConfig = bundledConfig) {
     product_name: c.deployment.productName ?? 'chimera',
     token_env: `${c.compatibility.envPrefix}_TOKEN`,
     env_prefix: c.compatibility.envPrefix,
-    approver: c.hooks.approver,
+    approvers: approversOf(c),
     session_header: `${c.compatibility.headerPrefix}-Session`,
     context_header: `${c.compatibility.headerPrefix}-Context`,
     connector_name: c.clients.connectorName,

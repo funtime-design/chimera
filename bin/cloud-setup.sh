@@ -56,7 +56,8 @@ bridge="${GOONBRIDGE_URL:-${CHIMERA_URL:-$(bridge_value url)}}"
 [ -n "$bridge" ] || { say "no bridge URL: set CHIMERA_URL (or GOONBRIDGE_URL), or download this script from your bridge"; exit 1; }
 bridge_token_env="$(bridge_value token_env)"
 bridge_token="${GOONBRIDGE_TOKEN:-${CHIMERA_TOKEN:-$(printenv "$bridge_token_env" 2>/dev/null || true)}}"
-bridge_approver="${GOONBRIDGE_APPROVER:-${CHIMERA_APPROVER:-$(bridge_value approver)}}"
+# Approvers: a comma-separated env override, else bridge.json/defaults `approvers` (or the old single `approver`).
+bridge_approvers="${GOONBRIDGE_APPROVERS:-${CHIMERA_APPROVERS:-${GOONBRIDGE_APPROVER:-${CHIMERA_APPROVER:-}}}}"
 bridge_session_header="$(bridge_value session_header)"
 bridge_context_header="$(bridge_value context_header)"
 if has jq; then
@@ -64,10 +65,13 @@ if has jq; then
   existing=$(cat "$bridge_config" 2>/dev/null || printf '{}')
   printf '%s' "$existing" | jq -e 'type == "object"' >/dev/null 2>&1 || existing='{}'
   jq -n --argjson defaults "$bridge_defaults" --argjson existing "$existing" \
-    --arg url "$bridge" --arg token_env "$bridge_token_env" --arg approver "$bridge_approver" \
+    --arg url "$bridge" --arg token_env "$bridge_token_env" --arg approvers "$bridge_approvers" \
     --arg session_header "$bridge_session_header" --arg context_header "$bridge_context_header" '
-    $defaults + $existing + {url: $url, token_env: $token_env, approver: $approver, session_header: $session_header, context_header: $context_header}
-    | {url, token_env, approver, session_header, context_header, product_name, env_prefix, connector_name,
+    ($defaults + $existing) as $base
+    | (if $approvers != "" then ($approvers | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != "")))
+       else ($base.approvers // (if $base.approver then [$base.approver] else [] end)) end) as $approver_list
+    | $base + {url: $url, token_env: $token_env, approvers: $approver_list, session_header: $session_header, context_header: $context_header}
+    | {url, token_env, approvers, session_header, context_header, product_name, env_prefix, connector_name,
        launchd_label, responder_name, cloud_config_ref, state_dir_name, protected_branches, enabled_hooks, external_skills, branch_prefix}' > "$bridge_config.tmp"
   mv "$bridge_config.tmp" "$bridge_config"
 fi
