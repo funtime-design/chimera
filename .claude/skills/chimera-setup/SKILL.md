@@ -9,6 +9,24 @@ You are walking a person, possibly a stranger to Cloudflare, through setup. `bin
 
 Use `pnpm run setup`, never `pnpm setup` (that is pnpm's own command and edits the shell profile).
 
+## What the user must see
+
+The person sees only what you write, never the tool output. So you relay script output that is marked for the user verbatim, never summarised.
+
+- Setup wraps every block meant for the person between a line `--- show this ---` and a line `--- end ---`. Print each such block to the user exactly, as a fenced code block, BEFORE saying anything else about it. Leave out only the two marker lines.
+- The prerequisites checklist is always shown in full, every tick and cross, even when everything passes. After it, one line: "All set" or the first fix.
+- After each setup step, relay its "Step N of M: ..." line and its "Result: ..." line verbatim, one step per line. Every step, including "already done".
+- On a pause (exit 2), the show block holds the "waiting for" line and the exact command or question. Print it verbatim, then ask.
+- An option that shows or explains something (such as "Show me the steps again") prints that text as its own message first, then you ask the same question again.
+
+## Do not
+
+- Do not merge several steps into one sentence.
+- Do not say "everything is in place" (or "all good", or similar) without the full checklist above it.
+- Do not paraphrase an instruction that contains a URL or a command. Copy it exactly.
+- Do not answer a question for the user, or pick an option on their behalf.
+- Do not replace a show block with "Ran N shell commands" or a summary of it.
+
 ## Wording rules
 
 - Plain language, short sentences. Answer first, detail after.
@@ -24,7 +42,7 @@ Use `pnpm run setup`, never `pnpm setup` (that is pnpm's own command and edits t
 pnpm run setup -- --prereqs
 ```
 
-It prints a short checklist: a tick or a cross per line, then either "All set" or "Next: <the one fix>". Relay the checklist verbatim as a short list. Exit 2 means something required is missing:
+It prints a short checklist inside a show block: a tick or a cross per line, then either "All set" or "Next: <the one fix>". Print the whole block verbatim as a fenced block, even when every line is a tick, then one line: "All set" or the first fix. Exit 2 means something required is missing:
 
 - Tell the person the single fix from the "Next:" line (for example `npx wrangler login`, which opens the browser to sign in to Cloudflare; or `brew install node`).
 - Help with the fix if they ask. Then wait for them to say it is done, and run `--prereqs` again. Do not start the questions until it exits 0.
@@ -141,7 +159,14 @@ pnpm run setup -- --answers "$TMPDIR/chimera-answers.json"
 
 Delete the answers file once step 1 is done. Exit codes: **0** done; **2** waiting for the person; **1** error (the message says what to fix; it never holds a secret). Exit 2 with "needs-answer: a, b" lists exactly the fields still missing, each with where to get it: ask those, one question per turn, and run again.
 
-Setup prints "Step N of M: <what>" and a "Result:" line per step. Relay each step's result in one line, for example "Step 1 of 7, writing the bridge settings: done."
+Setup prints "Step N of M: <what>" and a "Result:" line per step. Relay both lines verbatim for every step, one step after another, never merged; for example:
+
+```
+Step 1 of 7: writing the bridge settings (bridge.config.json and deployment.lock.json)
+  Result: done
+```
+
+On exit 2, print the show block (the "waiting for" line and the exact commands) verbatim before you ask anything.
 
 ## Step 4: the tokens
 
@@ -152,11 +177,12 @@ Setup pauses at step 2 (exit 2) until the tokens exist. One master token makes a
 AskUserQuestion, header "Token", question "Create the one master token now? Go to https://dash.cloudflare.com/profile/api-tokens > Create Token > Create Custom Token, add the permission Account: API Tokens: Edit (no other permissions), TTL 1 year, then Continue to summary > Create Token. Keep it in your password manager."
 Options:
 - **I have it, run mint**: I'll paste it into the masked prompt (typing stays hidden).
-- **Show me the steps again**: the same steps, one per line.
+- **Show me the steps again**: prints the 6 steps, numbered, as their own message.
 - **Skip, I'll use existing tokens via secrets:fill**: for tokens you already hold.
 
 Then:
 
+- **Show me the steps again.** Run `pnpm run setup -- --token-steps`. Print its show block (the 6 numbered steps with the dashboard URL) verbatim as its own message, then ask the same question again (re-ask Q10, same options). Never paraphrase the steps.
 - **Run mint.** Check for a terminal first: `node -e "process.exit(process.stdin.isTTY ? 0 : 1)"`. With a terminal (exit 0), run `pnpm secrets:mint -- --deployment <id>` there; the person pastes the token into the masked prompt. Without one (exit 1, the usual case in an agent's shell), tell the person the single command to run in their own terminal, in this folder: `pnpm secrets:mint -- --deployment <id>`, and wait until they say it finished.
 - **Skip**: the same, with `pnpm secrets:fill -- --deployment <id>`.
 - Never ask for a token in chat. Never read secrets.json aloud.
@@ -175,7 +201,7 @@ Options:
 - **Yes, push and deploy**: runs `pnpm run setup -- --deployment <id> --resume --yes`.
 - **Not yet**: nothing changes; resume any time with the same command.
 
-Re-running when everything is done prints the status and exits 0. `--resume` always starts with a done/todo checklist; relay it as a short list.
+Re-running when everything is done prints the status and exits 0. `--resume` always starts with a done/todo checklist in a show block; print it verbatim.
 
 ## Step 6: Cloudflare Access (only if Q6 was yes)
 

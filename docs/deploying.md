@@ -6,11 +6,12 @@ To work on your own deployment locally, export `CHIMERA_DEPLOYMENT=<id>`. `wrang
 
 ## Set up with `pnpm run setup`
 
-`pnpm run setup` (bin/setup.mjs; not `pnpm setup`, which is pnpm's own command) stands up a deployment and then runs every step below in order. With an agent, the `chimera-setup` skill in `.claude/skills/` drives it: prerequisites, detection, then one question per turn with choices.
+`pnpm run setup` (bin/setup.mjs; not `pnpm setup`, which is pnpm's own command) stands up a deployment and then runs every step below in order. With an agent, the `chimera-setup` skill in `.claude/skills/` drives it: prerequisites, detection, then one question per turn with choices. Text between `--- show this ---` and `--- end ---` is meant for the person; the skill relays it verbatim.
 
 ```sh
 pnpm run setup -- --prereqs                            # step 0: the checklist only
 pnpm run setup -- --detect                             # what setup can find out by itself, as JSON
+pnpm run setup -- --token-steps                        # the 6 numbered steps to create the master token
 pnpm run setup                                         # interactive
 pnpm run setup -- --answers answers.json               # non-interactive; detection fills what the file leaves out
 pnpm run setup -- --deployment <id> --resume [--yes]   # continue where it stopped
