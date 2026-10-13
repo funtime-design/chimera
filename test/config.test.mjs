@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { loadModule } from './hub-memory.mjs';
 const read = p => JSON.parse(readFileSync(new URL(`../${p}`, import.meta.url), 'utf8'));
 import { presentDeployments, brandingPattern } from './harness/baselines.mjs';
-// Every deployment folder in this checkout: the public tree ships only the example; a fork adds its own.
+// Every deployment folder in this checkout: the public tree ships the example and staging; a fork adds its own.
 const deploymentPaths = presentDeployments().map(id => `deployments/${id}/bridge.config.json`);
 const neutralPath = 'test/fixtures/neutral/bridge.config.json';
 

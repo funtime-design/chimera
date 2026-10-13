@@ -9,11 +9,14 @@ export function generateWrangler({ config, lock, template, accountId }) {
   validateLock(config, lock, template);
   if (!/^[a-fA-F0-9]{32}$/.test(accountId ?? '')) throw new Error('CLOUDFLARE_ACCOUNT_ID must be a 32-character account ID');
   const c = config.cloudflare;
+  // A workers.dev origin (staging) is served by the account subdomain, so it gets no custom-domain route.
+  const host = new URL(config.deployment.origin).host, onWorkersDev = host.endsWith('.workers.dev');
+  if (onWorkersDev && (!c.workersDev || !host.startsWith(`${c.workerName}.`))) throw new Error('a workers.dev origin needs cloudflare.workersDev true and the Worker name as its first label');
   return { ...structuredClone(template), name: c.workerName, account_id: accountId,
     kv_namespaces: [{ binding: template.kv_namespaces[0].binding, ...(c.oauthKvId ? { id: c.oauthKvId } : {}) }],
     vars: { GOONBRIDGE_CLAIM_SECONDS: String(config.timing.claimSeconds), ACCESS_PAGES_ISSUER: config.access?.pages?.issuer ?? '', ACCESS_PAGES_AUD: config.access?.pages?.audience ?? '' },
     observability: { enabled: c.observability }, workers_dev: c.workersDev, preview_urls: c.previewUrls,
-    routes: [{ pattern: new URL(config.deployment.origin).host, custom_domain: true }],
+    ...(onWorkersDev ? {} : { routes: [{ pattern: host, custom_domain: true }] }),
   };
 }
 export async function writeWrangler({ root = projectRoot, deployment, accountId = process.env.CLOUDFLARE_ACCOUNT_ID }) {

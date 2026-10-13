@@ -6,7 +6,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 const root = new URL('../../', import.meta.url);
 export const baselineUrl = (id, name) => new URL(`.private/fixtures/${id}/${name}`, root);
 
-// Every deployment folder in this checkout (the public tree ships only "example").
+// Every deployment folder in this checkout (the public tree ships "example" and "staging").
 export function presentDeployments() {
   return readdirSync(new URL('deployments/', root)).filter(id => existsSync(new URL(`deployments/${id}/bridge.config.json`, root))).sort();
 }
@@ -27,11 +27,13 @@ export function skipUnless(ids, name) {
   return ids.length ? false : `owner-mode baseline: no deployment folder with .private/fixtures/<id>/${name}`;
 }
 
+// The deployment folders the public repo itself ships: the example, and staging (the public repo's own staging bridge).
+export const PUBLIC_DEPLOYMENTS = ['example', 'staging'];
 // What neutral output must never contain: the legacy compatibility name, plus the identity of every private deployment
 // folder present in this checkout (its id, product name, owner, origin host and GitHub owner).
 export function brandingWords() {
   const words = new Set(['goonbridge']);
-  for (const id of presentDeployments().filter(id => id !== 'example')) {
+  for (const id of presentDeployments().filter(id => !PUBLIC_DEPLOYMENTS.includes(id))) {
     const c = readDeployment(id);
     for (const w of [id, c.deployment.productName, c.presentation?.owner, new URL(c.deployment.origin).host, c.github?.owner]) if (w && w !== 'chimera') words.add(w);
   }
