@@ -11,6 +11,7 @@ import { household } from "./hub/roster";
 import { SERVER_INFO, TOOLS } from "./tools";
 import { byOwner } from "./text";
 import { json, withBridge } from "./http";
+import { PAGE_CSP, crossSite, escapeHtml, grantsOf, settingsAction, settingsPage, statusPage } from "./settings";
 import SETUP_GUIDE from "../docs/agent-setup.md";
 import CONNECTOR from "../bin/goonbridge-mcp.mjs";
 import CLOUD_SETUP from "../bin/cloud-setup.sh";
@@ -39,8 +40,9 @@ export function staticFile(path: string, _origin: string): { body: string; type:
 // served to a request that carries neither, even if the Access app were missing.
 export async function pagesEndpoint(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  // The one form on these pages is /docs/devices (revoke a grant, forget a device); everything else is read-only.
-  const postable = url.pathname === "/docs/devices";
+  // The forms on these pages are /docs/devices (revoke a grant, forget a device) and the admin page /docs/settings
+  // (device permissions, forget a device); everything else is read-only.
+  const postable = url.pathname === "/docs/devices" || url.pathname === "/docs/settings";
   if (request.method !== "GET" && !(postable && request.method === "POST")) return json({ error: "method not allowed" }, 405, { Allow: postable ? "GET, POST" : "GET" });
   const member = (await authenticate(request, parseTokens(env.GOONBRIDGE_TOKENS))) ?? (await oauthMember(request, env, url.origin, await fullRoster(env))) ?? (await accessMember(request, env));
   if (!member) return signInPage();
@@ -50,6 +52,9 @@ export async function pagesEndpoint(request: Request, env: Env): Promise<Respons
     case "/docs/setup.md": return new Response(setupGuide(url.origin), { headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "no-store" } });
     case "/docs/tasks": return withBridge(env, async () => tasksPage(url, hubOf(env), member, await fullRoster(env)));
     case "/docs/devices": return withBridge(env, async () => request.method === "POST" ? devicesAction(request, env, member) : devicesPage(request, env, member));
+    // Admin pages (src/settings.ts): read-only setup status as JSON, and the device-centric settings page.
+    case "/docs/status": return withBridge(env, async () => statusPage(env, member));
+    case "/docs/settings": return withBridge(env, async () => request.method === "POST" ? settingsAction(request, env, member) : settingsPage(request, env, member));
     default: return json({ error: "not found" }, 404);
   }
 }
@@ -62,17 +67,6 @@ async function myDevices(request: Request, env: Env, member: string) {
   const { members } = await identify(request, env, member);
   const registered = new Set((await hubOf(env).registeredDevices()).map((d) => d.name));
   return { members, mine: household(member, members), registered };
-}
-
-async function grantsOf(oauth: NonNullable<Env["OAUTH_PROVIDER"]>, userId: string) {
-  const grants = [];
-  let cursor: string | undefined;
-  do {
-    const page = await oauth.listUserGrants(userId, { cursor });
-    grants.push(...page.items);
-    cursor = page.cursor;
-  } while (cursor);
-  return grants.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 async function devicesPage(request: Request, env: Env, member: string): Promise<Response> {
@@ -115,12 +109,7 @@ ${rows.join("\n")}
 }
 
 async function devicesAction(request: Request, env: Env, member: string): Promise<Response> {
-  // A browser arrives with the Access cookie, so a form posted from another site would carry it too: refuse cross-site posts.
-  const origin = request.headers.get("Origin");
-  const site = request.headers.get("Sec-Fetch-Site");
-  if ((origin !== null && origin !== new URL(request.url).origin) || (site !== null && site !== "same-origin" && site !== "none")) {
-    return json({ error: "cross-site form posts are refused" }, 403);
-  }
+  if (crossSite(request)) return json({ error: "cross-site form posts are refused" }, 403);
   const oauth = env.OAUTH_PROVIDER!;
   const form = await request.formData();
   const field = (k: string) => String(form.get(k) ?? "");
@@ -141,8 +130,6 @@ async function devicesAction(request: Request, env: Env, member: string): Promis
   }
   return new Response(null, { status: 303, headers: { Location: "/docs/devices", "Cache-Control": "no-store" } });
 }
-
-const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'";
 
 function signInPage(): Response {
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(deploymentDefaults.name)}</title>
@@ -225,10 +212,6 @@ function taskItem(t: TaskSummary): string {
     t.pr_url ? `<a href="${escapeHtml(t.pr_url)}">PR</a>` : "",
   ].filter(Boolean);
   return `<li><strong>${escapeHtml(t.key)}</strong> ${escapeHtml(t.title)} <small>${bits.join(" · ")}</small></li>`;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 export function setupGuide(origin: string): string {

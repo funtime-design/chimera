@@ -12,6 +12,8 @@ export type BridgeConfig = {
   cloudflare: { workerName: string; oauthKvId?: string; workersDev: boolean; previewUrls: boolean; observability: boolean };
   identity: { hubClass: 'Hub'; hubBinding: 'HUB'; hubKey: 'main' };
   members: Member[];
+  // Bridge role (not the task "owner" actor): people who may open /docs/status and /docs/settings.
+  admins?: string[];
   auth: { memberEmails?: SecretRef; staticTokensSecret: SecretRef };
   access?: { clientId?: string; clientSecret?: SecretRef; authorizationUrl?: string; tokenUrl?: string; jwksUrl?: string; pages?: { issuer: string; audience: string } };
   timing: Timing;
@@ -26,7 +28,7 @@ export type BridgeConfig = {
     configPat?: SecretRef;
   };
   clients: { connectorName: string; launchdLabel: string; stateDirName: string };
-  hooks: { approver: string; protectedBranches: string[]; enabled: string[]; externalSkills: { repo: string; commit: string; path: string }[]; branchPrefix?: string };
+  hooks: { approvers?: string[]; /** @deprecated read as [approver] */ approver?: string; protectedBranches: string[]; enabled: string[]; externalSkills: { repo: string; commit: string; path: string }[]; branchPrefix?: string };
   compatibility: { envPrefix: 'GOONBRIDGE' | 'CHIMERA'; headerPrefix: string; assetNames: { connector: string; responder: string } };
   presentation?: Presentation;
   labels?: Labels;
@@ -81,6 +83,11 @@ export function check(value: unknown, rule: Rule, path: string): void {
   } else if (rule.type === 'boolean' && typeof value !== 'boolean') fail('must be a boolean');
 }
 
+// The people who approve destructive commands. hooks.approver (one name) is the old key, read as a one-name list.
+export const approversOf = (c: Pick<BridgeConfig, 'hooks'>): string[] => c.hooks.approvers ?? (c.hooks.approver ? [c.hooks.approver] : []);
+// No admins configured means nobody opens the admin pages; there is no personal fallback.
+export const adminsOf = (c: Pick<BridgeConfig, 'admins'>): string[] => c.admins ?? [];
+
 export function validateConfig(value: unknown): BridgeConfig {
   check(value, schema as Rule, 'config');
   const config = value as BridgeConfig;
@@ -96,7 +103,14 @@ export function validateConfig(value: unknown): BridgeConfig {
     const values = [config.labels.ciRed, config.labels.branchGone, config.labels.deployFailed, config.labels.reReview, config.labels.revert, ...config.labels.exempt];
     if (new Set(values).size !== values.length) throw new Error('config.labels: policy labels must be distinct');
   }
+  for (const m of config.members) if (m.kind === 'person' && m.name.includes('-')) throw new Error('config.members: person names must not contain a dash (a dash separates a person from their device)');
+  const hooks = config.hooks;
+  if (hooks.approvers && hooks.approver !== undefined) throw new Error('config.hooks: approvers replaces approver; set approvers, not both');
+  if (!hooks.approvers && hooks.approver === undefined) throw new Error('config.hooks.approvers: required');
   if (config.members.length) {
+    const isPerson = (name: string) => config.members.some(m => m.name === name && m.kind === 'person');
+    for (const name of config.admins ?? []) if (!isPerson(name)) throw new Error('config.admins: each admin must be a person in members');
+    for (const name of approversOf(config)) if (!isPerson(name)) throw new Error('config.hooks.approvers: each approver must be a person in members');
     for (const person of Object.keys(config.cloud?.routines ?? {})) if (!config.members.some(m => m.name === person && m.kind === 'person')) throw new Error('config.cloud.routines: key must name a person in members');
     for (const routine of Object.values(config.cloud?.namedRoutines ?? {})) for (const member of routine.allow ?? []) if (!names.has(member)) throw new Error('config.cloud.namedRoutines.allow: member must exist in members');
   }

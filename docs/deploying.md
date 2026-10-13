@@ -4,11 +4,35 @@ Your deployment folder lives in `deployments/<id>/` in your private fork; the pu
 
 To work on your own deployment locally, export `CHIMERA_DEPLOYMENT=<id>`. `wrangler dev` (its build step), `pnpm build:responder` and `pnpm gen:wrangler` point `src/config/deployment.ts` at `deployments/<id>/`; the responder, client defaults, generated client files and the test harness read the same folder. Commands that take `--deployment` default to it too.
 
+## Set up with `pnpm run setup`
+
+`pnpm run setup` (bin/setup.mjs; not `pnpm setup`, which is pnpm's own command) stands up a deployment from a short questionnaire and then runs every step below in order. On a terminal it asks; an agent passes the answers as a file (the `chimera-setup` skill in `.claude/skills/` shows the format):
+
+```sh
+pnpm run setup                                         # interactive
+pnpm run setup -- --answers answers.json               # non-interactive
+pnpm run setup -- --deployment <id> --resume [--yes]   # continue where it stopped
+```
+
+It asks for the deployment id, display name, origin, Cloudflare account ID, Worker name, admins and members (person names: lowercase, no dash, each used once) and each person's sign-in email, and whether Cloudflare Access guards the bridge. It writes `deployments/<id>/bridge.config.json` and `deployment.lock.json` (commit both), and creates the ignored `secrets.json` holding the emails and account ID, with placeholders for the tokens. Then: validate, generate (Wrangler config, client files, responder), `secrets:push` (dry run, then the real push after a yes), `wrangler deploy` (after a yes), and the contract check. Each step prints what it does, runs, verifies and records done/todo in `.chimera-setup/<id>.json` (ignored). `--yes` answers the two confirmations for a non-interactive run. Exit 0 is done; exit 2 means it waits for a person (fill the listed `secrets.json` keys, or confirm); exit 1 is an error. A finished setup re-run prints its status and exits 0. No secret value is ever printed. `pnpm secrets:mint`, which will fill the tokens for you, is not available yet.
+
+### Bridge roles
+
+People live only in config and secrets: `members` (kind `person`) in `bridge.config.json`, their emails and tokens in `secrets.json`. `admins` (people) open the admin pages; `hooks.approvers` (people) approve destructive commands from the approval hook, and any one of them may answer. The old single `hooks.approver` is still read as a one-name list; set one key, never both, and there is no personal fallback. Adding a person = add them to `members` (and `admins` if they should be one), add their email and token to `secrets.json`, run `pnpm secrets:push`, redeploy, and, with Cloudflare Access, add them to the Access group too.
+
+### Cloudflare Access
+
+With Access in front of the bridge (an Access for SaaS app for sign-in, and the self-hosted app over `/docs`), the app allows one Access group, a fixed email list. A new person must be in that group as well as in config: Zero Trust > Access > Access groups, add the email. `pnpm run setup` prints this step per person, or adds the emails through the Cloudflare API when `CLOUDFLARE_ACCESS_TOKEN` (an API token that can edit Access groups) is set and the answers name `access.groupId`. Without Access the bridge runs token-only: members use their static tokens (a bearer token also opens the `/docs` pages); the browser and device sign-ins need Access.
+
+### Admin pages
+
+`/docs/status` (JSON) and `/docs/settings` sit behind the same sign-in as every `/docs` page and answer admins only. Status reports what the Worker can see: version, deployment id, number of people, registered devices, the last passed contract check (`contract:check` records it) and whether Access is configured. Settings is device-centric: each person's devices, forget a signed-in device, per-device permission toggles (`may_run_full`: who besides its person may run it in full mode, the T-41 trust; `may_edit_tasks`: off for notes and claims only, on to let a cloud session change title and brief; `may_act_as_person`: off so the device no longer counts as its person), and connected agents. Every permission change is recorded as an event. Bridge-level values are shown read-only: edit them in `bridge.config.json` and redeploy.
+
 ## Create a deployment
 
 1. Fork the engine and check out the release tag you intend to run. Install Node 22.18+ and pnpm 10, then run `pnpm install --frozen-lockfile`.
 2. Copy `deployments/example/` to `deployments/<id>/`. Set `deployment.id` to that directory name, choose a Worker name and HTTPS origin, and customize members, integrations and presentation in `bridge.config.json`. The product name is `deployment.productName` (defaults to `chimera`).
-3. Update `deployment.lock.json` to match the chosen Worker name and origin. Preserve `Hub`, `HUB`, `main`, the migration lineage beginning at `v1`, and `OAUTH_KV`. For an existing deployment preserve its actual KV namespace ID too. Before the next production deployment, the owner MUST discover the existing live OAuth KV namespace ID in the correct Cloudflare account, then record that same ID in `cloudflare.oauthKvId` and `deployment.lock.json` together. The current legacy lock has `oauthKvId: null`; it is not proof of live namespace identity. Do not create a replacement namespace. Discovery is an owner step requiring account access; this offline stage deliberately does not perform R1.
+3. Update `deployment.lock.json` to match the chosen Worker name and origin. Preserve `Hub`, `HUB`, `main`, the migration lineage beginning at `v1`, and `OAUTH_KV`. For an existing deployment preserve its actual KV namespace ID too. Before the next production deployment, an admin MUST discover the existing live OAuth KV namespace ID in the correct Cloudflare account, then record that same ID in `cloudflare.oauthKvId` and `deployment.lock.json` together. The current legacy lock has `oauthKvId: null`; it is not proof of live namespace identity. Do not create a replacement namespace. Discovery is an admin step requiring account access; this offline stage deliberately does not perform R1.
 4. Copy `secrets.example.json` to `secrets.json` inside your deployment directory and replace every fake value locally. Remove optional integration fields and their config references when you do not use that integration. Never commit this file. Keep account IDs, member emails and credentials out of `bridge.config.json`.
 
 The secrets schema is `config/secrets.schema.json`. `GOONBRIDGE_TOKENS` maps **member name to token** in this file; the push script converts it to the existing token-to-member runtime JSON. Tokens must be at least 24 characters and distinct. `GOONBRIDGE_MEMBERS` is an email-to-member map. Routine maps contain trigger/token pairs; named routines use `GOONBRIDGE_ROUTINE_<NAME>_TRIGGER` and `_TOKEN`. Allowed members for named routines belong in the public config. Cloudflare account ID is `cloudflare.accountId`; `CLOUDFLARE_API_TOKEN` is deploy-only. Required `contractToken` names a member key in `GOONBRIDGE_TOKENS` (for example, `"contractToken": "alice"`); its existing token becomes the Actions contract bearer, without duplicating the token value in the file.
@@ -71,9 +95,9 @@ Run the engine integration suite in its isolated test environment before releasi
 
 `compatibility.envPrefix` supports exactly `GOONBRIDGE` and `CHIMERA`. Legacy `GOONBRIDGE_*` overrides keep precedence. For the legacy prefix, absent/empty/invalid/nonpositive claim duration falls back to 900 seconds; generated deployment vars still explicitly set the configured `timing.claimSeconds`. Other deployment timing defaults remain configurable.
 
-`hooks.enabled: []` disables optional hook work; `externalSkills: []` disables all external-skill downloads, including any owner fallback. Each listed skill is installed under the directory named by its path's parent (use distinct names). Existing clients without policy retain legacy hook activation; update installed `bridge.json` and hooks together. The setup bootstrap remains in SessionStart so it can install that configuration.
+`hooks.enabled: []` disables optional hook work; `externalSkills: []` disables all external-skill downloads; there is no personal fallback. Each listed skill is installed under the directory named by its path's parent (use distinct names). Existing clients without policy retain legacy hook activation; update installed `bridge.json` and hooks together. The setup bootstrap remains in SessionStart so it can install that configuration.
 
-`pnpm build:responder` writes the configured checkout filename and the legacy asset alias. The installer uses the configured responder asset basename. A legacy deployment keeps `goonbridge-responder.mjs`, its launchd label and `~/.goonbridge` through its config; other deployments use their configured filename and state directory. The committed asset is always `bin/goonbridge-responder.mjs` (the served alias); the configured checkout copy is ignored and rebuilt by `pnpm build:responder`. The bundled responder's defaults come from the selected deployment even without a local `bridge.json`. The checkout installer loads the same public projection through `bin/client-defaults.mjs`; a detached installer with neither supplied defaults nor local config refuses to guess an owner deployment. Both legacy asset URLs remain served aliases.
+`pnpm build:responder` writes the configured checkout filename and the legacy asset alias. The installer uses the configured responder asset basename. A legacy deployment keeps `goonbridge-responder.mjs`, its launchd label and `~/.goonbridge` through its config; other deployments use their configured filename and state directory. The committed asset is always `bin/goonbridge-responder.mjs` (the served alias); the configured checkout copy is ignored and rebuilt by `pnpm build:responder`. The bundled responder's defaults come from the selected deployment even without a local `bridge.json`. The checkout installer loads the same public projection through `bin/client-defaults.mjs`; a detached installer with neither supplied defaults nor local config refuses to guess a deployment. Both legacy asset URLs remain served aliases.
 
 Remaining legacy runtime text is intentionally recorded for a later wording change: `bin/goonbridge-mcp.mjs` diagnostics and the `src/cloudconfig.ts` User-Agent. The installer's Login Items launcher and the cloud env file (`~/.config/<product>/env`) are named after `deployment.productName`. These are distinct from supported env/header/asset aliases and persisted device or install identities; do not rename those identities as branding cleanup.
 
@@ -87,7 +111,7 @@ T-66's state invariant applies to transitions of existing tasks through `transit
 CHIMERA_SECRET_CMD='op read "op://<vault>/$1/credential"'
 ```
 
-The Claude Code hooks (`.claude/hooks/`) likewise have no personal fallbacks: without a bridge URL they do nothing, and the approval hook refuses destructive commands until a bridge URL and approver are configured.
+The Claude Code hooks (`.claude/hooks/`) likewise have no personal fallbacks: without a bridge URL they do nothing, and the approval hook refuses destructive commands until a bridge URL and at least one approver (`hooks.approvers`) are configured.
 
 ## Maintainers' notes
 

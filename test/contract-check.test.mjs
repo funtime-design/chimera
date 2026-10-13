@@ -17,6 +17,7 @@ function server({ version = current, faults = { errors: [], work_threads: [] }, 
     if (p === '/v1/me') return Response.json({ member: 'alice' });
     if (p === '/v1/faults') return Response.json(faults);
     if (p === '/v1/version') return Response.json(typeof version === 'function' ? version() : version);
+    if (p === '/v1/contract-check') { assert.equal(req.method, 'POST'); return Response.json({ recorded: true }); }
     assert.equal(p, '/mcp'); assert.equal(req.method, 'POST');
     assert.equal((await req.json()).method, 'tools/list');
     return Response.json({ jsonrpc: '2.0', id: 1, result: { tools: tools.map(name => ({ name })) } });
@@ -27,7 +28,8 @@ const options = stub => ({ origin: 'https://example.com', token, expectedEngine:
 
 test('post-deploy fresh HTTP contracts pass with authenticated requests', async () => {
   const stub = server(); await checkContract(options(stub));
-  assert.deepEqual(stub.requests.map(r => new URL(r.url).pathname).sort(), ['/mcp', '/v1/faults', '/v1/me', '/v1/version']);
+  assert.deepEqual(stub.requests.map(r => new URL(r.url).pathname).sort(), ['/mcp', '/v1/contract-check', '/v1/faults', '/v1/me', '/v1/version']);
+  assert.equal(new URL(stub.requests.at(-1).url).pathname, '/v1/contract-check', 'recorded only after every check passed');
 });
 
 test('old faults/tools shape and invalid auth fail without redeploy or response leakage', async () => {
@@ -65,17 +67,32 @@ test('missing legacy Hub RPC is stale, but absent version route and old Worker f
 
 test('version REST endpoint gets Hub engine/schema/build from Hub RPC, without database writes', async () => {
   const { handleRest } = await loadModule('src/rest.ts');
-  const { ENGINE_VERSION } = await loadModule('src/version.ts');
+  const { ENGINE_VERSION, HUB_SCHEMA_VERSION } = await loadModule('src/version.ts');
   const { hub, sql } = await memoryHub({ CF_VERSION_METADATA: { id: 'hub-build' } });
   try {
     const before = sql.db.prepare('SELECT total_changes() AS n').get().n;
     const req = new Request('https://example.com/v1/version');
     const response = await handleRest(req, new URL(req.url), hub, 'alice', ['alice'], { CF_VERSION_METADATA: { id: 'worker-build' } });
-    assert.deepEqual(await response.json(), { worker: { engine: ENGINE_VERSION, schema: 1, build: 'worker-build' }, hub: { engine: ENGINE_VERSION, schema: 1, build: 'hub-build' } });
+    assert.deepEqual(await response.json(), { worker: { engine: ENGINE_VERSION, schema: HUB_SCHEMA_VERSION, build: 'worker-build' }, hub: { engine: ENGINE_VERSION, schema: HUB_SCHEMA_VERSION, build: 'hub-build' } });
     assert.equal(sql.db.prepare('SELECT total_changes() AS n').get().n, before);
     const legacy = await handleRest(req, new URL(req.url), { version: async () => { throw new Error('RPC unavailable'); } }, 'alice', ['alice'], {});
     assert.deepEqual((await legacy.json()).hub, null);
   } finally { sql.db.close(); }
+});
+
+test('a passed contract check is recorded once per call for /docs/status; a failed record does not fail the check', async () => {
+  const { handleRest } = await loadModule('src/rest.ts');
+  const { hub, sql } = await memoryHub();
+  try {
+    assert.equal((await hub.setupStatus()).last_contract_check, null);
+    const req = new Request('https://example.com/v1/contract-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine: '0.1.0' }) });
+    const res = await handleRest(req, new URL(req.url), hub, 'alice', ['alice'], {});
+    assert.deepEqual(await res.json(), { recorded: true });
+    assert.match((await hub.setupStatus()).last_contract_check, /^\d{4}-/);
+  } finally { sql.db.close(); }
+  const failing = server();
+  const fetchImpl = async (url, init) => new URL(url).pathname === '/v1/contract-check' ? new Response('private-sentinel', { status: 404 }) : failing.fetchImpl(url, init);
+  await checkContract({ ...options(failing), fetchImpl });
 });
 
 test('contract rejects redirects, transport errors and malformed JSON without echoing bodies', async () => {

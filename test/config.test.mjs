@@ -142,7 +142,7 @@ test('client projection is nonsecret and safely quoted for shell scripts', async
   config.deployment.displayName = "Alice's bridge";
   config.deployment.productName = "Alice's bridge";
   const client = clientConfig(config);
-  assert.equal(client.approver, 'alice');
+  assert.deepEqual(client.approvers, ['alice']);
   assert.equal(client.token_env, 'CHIMERA_TOKEN');
   assert.equal(client.launchd_label, config.clients.launchdLabel);
   assert.doesNotMatch(JSON.stringify(client), /staticTokens|memberEmails|accountId|configPat/);

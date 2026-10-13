@@ -62,6 +62,9 @@ var bridge_config_default = {
       person: "alice"
     }
   ],
+  admins: [
+    "alice"
+  ],
   auth: {
     staticTokensSecret: {
       env: "CHIMERA_TOKENS"
@@ -92,7 +95,9 @@ var bridge_config_default = {
     stateDirName: ".chimera"
   },
   hooks: {
-    approver: "alice",
+    approvers: [
+      "alice"
+    ],
     protectedBranches: [
       "main"
     ],
@@ -281,6 +286,18 @@ var bridge_config_schema_default = {
           "kind"
         ],
         additionalProperties: false
+      }
+    },
+    admins: {
+      description: "People (member names, no dash) who may open the admin pages /docs/status and /docs/settings.",
+      type: "array",
+      items: {
+        type: "string",
+        minLength: 1,
+        pattern: "^[a-z0-9][a-z0-9_]*$",
+        not: {
+          const: "all"
+        }
       }
     },
     auth: {
@@ -673,13 +690,26 @@ var bridge_config_schema_default = {
     hooks: {
       type: "object",
       properties: {
+        approvers: {
+          description: 'People whose "approve" reply lets one destructive command run.',
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+            pattern: "^[a-z0-9][a-z0-9_]*$",
+            not: {
+              const: "all"
+            }
+          }
+        },
         approver: {
           type: "string",
           minLength: 1,
           pattern: "^[a-z0-9][a-z0-9_-]*$",
           not: {
             const: "all"
-          }
+          },
+          description: "Deprecated single-name form of approvers, still read; never set both."
         },
         protectedBranches: {
           type: "array",
@@ -727,7 +757,6 @@ var bridge_config_schema_default = {
         }
       },
       required: [
-        "approver",
         "protectedBranches",
         "enabled",
         "externalSkills"
@@ -1000,6 +1029,8 @@ function check(value, rule, path) {
     if (typeof value !== "number" || !Number.isFinite(value) || rule.exclusiveMinimum !== void 0 && value <= rule.exclusiveMinimum) fail("must be positive finite seconds");
   } else if (rule.type === "boolean" && typeof value !== "boolean") fail("must be a boolean");
 }
+var approversOf = (c) => c.hooks.approvers ?? (c.hooks.approver ? [c.hooks.approver] : []);
+var adminsOf = (c) => c.admins ?? [];
 function validateConfig(value) {
   check(value, bridge_config_schema_default, "config");
   const config = value;
@@ -1015,7 +1046,14 @@ function validateConfig(value) {
     const values = [config.labels.ciRed, config.labels.branchGone, config.labels.deployFailed, config.labels.reReview, config.labels.revert, ...config.labels.exempt];
     if (new Set(values).size !== values.length) throw new Error("config.labels: policy labels must be distinct");
   }
+  for (const m of config.members) if (m.kind === "person" && m.name.includes("-")) throw new Error("config.members: person names must not contain a dash (a dash separates a person from their device)");
+  const hooks = config.hooks;
+  if (hooks.approvers && hooks.approver !== void 0) throw new Error("config.hooks: approvers replaces approver; set approvers, not both");
+  if (!hooks.approvers && hooks.approver === void 0) throw new Error("config.hooks.approvers: required");
   if (config.members.length) {
+    const isPerson = (name) => config.members.some((m) => m.name === name && m.kind === "person");
+    for (const name of config.admins ?? []) if (!isPerson(name)) throw new Error("config.admins: each admin must be a person in members");
+    for (const name of approversOf(config)) if (!isPerson(name)) throw new Error("config.hooks.approvers: each approver must be a person in members");
     for (const person of Object.keys(config.cloud?.routines ?? {})) if (!config.members.some((m) => m.name === person && m.kind === "person")) throw new Error("config.cloud.routines: key must name a person in members");
     for (const routine of Object.values(config.cloud?.namedRoutines ?? {})) for (const member of routine.allow ?? []) if (!names.has(member)) throw new Error("config.cloud.namedRoutines.allow: member must exist in members");
   }
@@ -1128,7 +1166,7 @@ var cloudParentPattern = new RegExp(`^[^-]+${CLOUD_SUFFIX}$`);
 
 // src/deployment.ts
 function deploymentText(c) {
-  const owner = c.presentation?.owner ?? c.hooks.approver;
+  const owner = c.presentation?.owner ?? adminsOf(c)[0] ?? approversOf(c)[0] ?? "admin";
   return {
     name: c.deployment.productName,
     owner,
