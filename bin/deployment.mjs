@@ -1,4 +1,4 @@
-import { readFile, realpath } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -43,10 +43,16 @@ export async function loadDeployment({ root = projectRoot, deployment } = {}) {
   validateLock(config, lock, template);
   return { config, lock, template };
 }
-export async function requirePrivateSecrets(root, deployment) {
-  const rel = `deployments/${deployment}/secrets.json`, file = path.join(deploymentDir(root, deployment), 'secrets.json');
+// allowMissing: for tools that create the file (secrets:mint, secrets:fill); the same guards apply to the path.
+export async function requirePrivateSecrets(root, deployment, { allowMissing = false } = {}) {
+  const rel = `deployments/${deployment}/secrets.json`, dir = deploymentDir(root, deployment), file = path.join(dir, 'secrets.json');
   let canonical;
-  try { canonical = await realpath(file); } catch { throw new Error('secrets.json missing'); }
+  try { canonical = await realpath(file); } catch {
+    if (!allowMissing) throw new Error('secrets.json missing');
+    // A dangling symlink also fails realpath; writing through it would land outside the guarded path.
+    if (await lstat(file).then(() => true, () => false)) throw new Error('secrets.json must not be a symlink');
+    try { canonical = path.join(await realpath(dir), 'secrets.json'); } catch { throw new Error(`deployments/${deployment}/ missing`); }
+  }
   // Do not permit a symlink to an unguarded file, including a symlinked deployment directory.
   if (canonical !== path.join(await realpath(root), rel)) throw new Error('secrets.json must not be a symlink');
   const git = args => { try { execFileSync('git', args, { cwd: root, stdio: 'pipe' }); return true; } catch { return false; } };

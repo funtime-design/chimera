@@ -44,7 +44,7 @@ Delete the answers file once the config step is done. Exit codes: **0** done; **
 
 ## 3. When it pauses (exit 2)
 
-- **Secrets to fill**: it lists key names (e.g. `GOONBRIDGE_TOKENS.alice`, `CLOUDFLARE_API_TOKEN`). Tell the person to fill them in `deployments/<id>/secrets.json` (tokens: 24+ random characters, e.g. `openssl rand -hex 24`; the Cloudflare token must be able to deploy this Worker). `pnpm secrets:mint` is not available yet.
+- **Secrets to fill**: it lists key names (e.g. `GOONBRIDGE_TOKENS.alice`, `CLOUDFLARE_API_TOKEN`). Tell the person to fill them in `deployments/<id>/secrets.json` (tokens: 24+ random characters, e.g. `openssl rand -hex 24`; the Cloudflare token must be able to deploy this Worker). Or have them run `pnpm secrets:mint -- --deployment <id>` in their own terminal: it generates the member tokens and mints the deploy token from one minter token (asked masked), or `pnpm secrets:fill -- --deployment <id>` for values they already hold. Never ask for a token in chat.
 - **Confirmation**: pushing secrets and deploying change live systems. Show the person the dry-run list it printed, get a yes, then resume with `--yes`.
 
 ```sh

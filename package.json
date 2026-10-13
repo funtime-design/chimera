@@ -17,6 +17,8 @@
     "deploy": "wrangler deploy",
     "test:engine": "node test/harness/setup.mjs",
     "secrets:push": "node bin/secrets-push.mjs",
+    "secrets:mint": "node bin/secrets-mint.mjs",
+    "secrets:fill": "node bin/secrets-fill.mjs",
     "gen:wrangler": "node bin/gen-wrangler.mjs",
     "validate:deployment": "node bin/validate-deployment.mjs",
     "contract:check": "node bin/contract-check.mjs",
