@@ -17,6 +17,8 @@ import { engineTemplate, identityOf, isMain, loadDeployment, projectRoot, readJs
 import { writeWrangler } from './gen-wrangler.mjs';
 import { pushSecrets } from './secrets-push.mjs';
 import { checkAfterDeploy } from './contract-check.mjs';
+import { makeRedactor } from './secrets-common.mjs';
+import { mintSecrets } from './secrets-mint.mjs';
 import { buildResponder } from './build-responder.mjs';
 
 export const STATE_DIR = '.chimera-setup';
@@ -116,8 +118,7 @@ export async function setup({
   root = projectRoot, argv = [], env = process.env, isTTY = !!(process.stdin.isTTY && process.stdout.isTTY),
   prompt, run = runCommand, fetchImpl = fetch, out = line => process.stdout.write(`${line}\n`), err = line => process.stderr.write(`${line}\n`),
 } = {}) {
-  const hidden = new Set();
-  const redact = text => [...hidden].sort((x, y) => y.length - x.length).reduce((t, v) => t.split(v).join('[redacted]'), String(text));
+  const { hide, redact } = makeRedactor();
   const say = line => out(redact(line));
   const warn = line => err(redact(line));
   let ask = prompt, rl;
@@ -131,7 +132,7 @@ export async function setup({
     if (opts.answers) {
       try { answers = JSON.parse(await readFile(path.resolve(opts.answers), 'utf8')); } catch { throw new Error('--answers: file missing or not valid JSON (contents not shown)'); }
     }
-    if (answers?.accountId) hidden.add(answers.accountId);
+    if (answers?.accountId) hide(answers.accountId);
     const id = opts.deployment ?? answers?.deployment ?? (opts.resume ? await onlyState(root) : null);
     if (opts.deployment && answers && answers.deployment !== opts.deployment) throw new Error('--deployment and the answers file name different deployments');
     const stateFile = id && ID.test(id) ? path.join(root, STATE_DIR, `${id}.json`) : null;
@@ -142,7 +143,7 @@ export async function setup({
     if (!state?.steps?.config && !configured && !answers) {
       if (!isTTY) throw new Error('not a terminal: pass --answers <file.json> (see .claude/skills/chimera-setup/SKILL.md)');
       answers = await questionnaire(question, id, say);
-      hidden.add(answers.accountId);
+      hide(answers.accountId);
     }
     if (answers) {
       const problems = checkAnswers(answers);
@@ -164,7 +165,7 @@ export async function setup({
     const loadSecrets = async () => {
       const f = await requirePrivateSecrets(root, deployment);
       const s = await readJson(f);
-      for (const v of secretValues(s)) hidden.add(v);
+      for (const v of secretValues(s)) hide(v);
       return s;
     };
     let paused = null;
@@ -195,6 +196,14 @@ export async function setup({
             if (!answers) throw new Error('secrets.json is missing and there are no answers to create it from: pass --answers');
             await writeFile(target, `${JSON.stringify(secretsFrom(answers), null, 2)}\n`, { mode: 0o600 });
             say(`  created deployments/${deployment}/secrets.json (ignored by git; never commit it)`);
+            // A new file holds placeholders: secrets:mint fills them when a minter token is at hand (env or terminal).
+            if (env.CHIMERA_TOKEN_MINTER || isTTY) {
+              say('  secrets:mint: generating member tokens and minting the deploy token ...');
+              rl?.close(); rl = null; ask = prompt;
+              const code = await mintSecrets({ root, argv: ['--deployment', deployment], env, isTTY, ask: prompt, fetchImpl, offerPush: false,
+                out: line => say(`  ${line}`), err: line => warn(`  ${line}`) });
+              if (code !== 0) say('  secrets:mint did not finish; the placeholders below remain.');
+            }
           }
           secrets = await loadSecrets();
           const todo = unfilled(secrets);
@@ -202,7 +211,7 @@ export async function setup({
             await mark(step, 'todo', `fill: ${todo.join(', ')}`);
             say(`  fill these values in deployments/${deployment}/secrets.json, then run: pnpm run setup -- --deployment ${deployment} --resume`);
             for (const key of todo) say(`    - ${key}${/^GOONBRIDGE_TOKENS\./.test(key) ? ' (a random string of 24+ characters, e.g. openssl rand -hex 24)' : key === 'CLOUDFLARE_API_TOKEN' ? ' (Cloudflare API token that can deploy this Worker)' : ''}`);
-            say('  pnpm secrets:mint will fill the tokens for you in a later release; it is not available yet.');
+            say(`  Or let pnpm secrets:mint -- --deployment ${deployment} generate the tokens and mint the deploy token from one minter token (CHIMERA_TOKEN_MINTER or asked masked); pnpm secrets:fill -- --deployment ${deployment} enters values you already hold.`);
             paused = 'secrets'; break;
           }
           await mark(step, 'done');
@@ -243,7 +252,7 @@ export async function setup({
           const emails = Object.keys(secrets.GOONBRIDGE_MEMBERS ?? {});
           const group = state.accessGroup;
           const token = env.CLOUDFLARE_ACCESS_TOKEN;
-          if (token) hidden.add(token);
+          if (token) hide(token);
           if (token && group && emails.length && await confirm(`add ${emails.length} email(s) to Access group ${group} through the Cloudflare API`)) {
             await addToAccessGroup(fetchImpl, secrets.cloudflare.accountId, group, token, emails);
             say(`  added ${emails.length} email(s) to the Access group`);

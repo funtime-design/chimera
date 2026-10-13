@@ -1,6 +1,6 @@
 import schema from '../../config/secrets.schema.json';
 import { check, validateConfig, type BridgeConfig, type SecretRef, type Rule } from './schema';
-export { validateConfig } from './schema';
+export { validateConfig, check } from './schema';
 export { clientConfig } from './client';
 
 type Pair = { trigger: string; token: string };

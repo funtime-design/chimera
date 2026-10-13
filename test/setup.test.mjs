@@ -101,7 +101,8 @@ test('setup --answers writes config, lock and secrets, pauses for secrets, then 
   assert.equal(secrets.contractToken, 'alice');
   assert.match(first.text, /GOONBRIDGE_TOKENS\.alice/);
   assert.match(first.text, /CLOUDFLARE_API_TOKEN/);
-  assert.match(first.text, /secrets:mint .*not available yet/);
+  assert.match(first.text, /secrets:mint -- --deployment acme/);
+  assert.match(first.text, /secrets:fill -- --deployment acme/);
   for (const email of Object.values(EMAIL)) assert.ok(!first.text.includes(email), 'no emails printed without Access');
   let state = await stateClean(root);
   assert.equal(state.steps.config.status, 'done');
@@ -248,4 +249,27 @@ test('Cloudflare Access: prints the manual step per person, or adds the emails t
   assert.deepEqual(puts, [{ name: 'Team List', include: [{ email: { email: EMAIL.alice } }, { email: { email: EMAIL.bob } }] }], 'only the missing email is added');
   assert.equal((await stateClean(viaApi)).steps.access.status, 'done');
   noSecrets(r.text, 'Access API');
+});
+
+test('with a minter token, setup fills the new secrets.json through secrets:mint and goes on without printing a value', async t => {
+  const root = await sandbox(t);
+  const minter = `minter_${hex(16)}`, minted = `minted_${hex(16)}`;
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push(url);
+    if (init.headers?.Authorization !== `Bearer ${minter}`) return Response.json({ success: false }, { status: 403 });
+    if (url.includes('/permission_groups')) return Response.json({ success: true, result: [{ id: 'pg', name: 'Workers Editor' }] });
+    return Response.json({ success: true, result: { value: minted } });
+  };
+  const r = await runSetup(root, ['--answers', await answersFile(root)], { env: { CHIMERA_TOKEN_MINTER: minter }, fetchImpl });
+  assert.equal(r.code, 2, r.text);
+  assert.match(r.text, /waiting for confirmation/, 'stops at the push confirmation, past the secrets step');
+  const secrets = await read(root, 'deployments/acme/secrets.json');
+  assert.equal(secrets.CLOUDFLARE_API_TOKEN, minted);
+  for (const v of Object.values(secrets.GOONBRIDGE_TOKENS)) assert.match(v, /^[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(secrets.GOONBRIDGE_MEMBERS, { [EMAIL.alice]: 'alice', [EMAIL.bob]: 'bob' }, 'emails from the answers are kept');
+  assert.equal(secrets.cloudflare.accountId, SECRET.account);
+  for (const v of [minter, minted, ...Object.values(secrets.GOONBRIDGE_TOKENS), secrets.GOONBRIDGE_GITHUB_WEBHOOK_SECRET]) assert.ok(!r.text.includes(v), 'no value printed');
+  noSecrets(r.text, 'mint in setup');
+  assert.equal((await stateClean(root)).steps.secrets.status, 'done');
 });
