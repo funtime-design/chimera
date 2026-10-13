@@ -1,0 +1,70 @@
+{
+  "$schema": "../../config/bridge.config.schema.json",
+  "schemaVersion": 1,
+  "deployment": {
+    "id": "staging",
+    "displayName": "chimera staging",
+    "origin": "https://chimera-staging.account-subdomain.workers.dev"
+  },
+  "cloudflare": {
+    "workerName": "chimera-staging",
+    "workersDev": true,
+    "previewUrls": false,
+    "observability": true
+  },
+  "identity": {
+    "hubClass": "Hub",
+    "hubBinding": "HUB",
+    "hubKey": "main"
+  },
+  "members": [
+    {
+      "name": "staging",
+      "kind": "person"
+    },
+    {
+      "name": "probe",
+      "kind": "person"
+    }
+  ],
+  "admins": [
+    "staging"
+  ],
+  "auth": {
+    "staticTokensSecret": {
+      "env": "CHIMERA_TOKENS"
+    }
+  },
+  "timing": {
+    "claimSeconds": 120,
+    "claimLeaseSeconds": 60,
+    "bootSeconds": 60,
+    "onlineSeconds": 60,
+    "statusExpirySeconds": 600,
+    "deploySeconds": 300
+  },
+  "clients": {
+    "connectorName": "chimera-staging",
+    "launchdLabel": "dev.chimera.staging-responder",
+    "stateDirName": ".chimera-staging"
+  },
+  "hooks": {
+    "approvers": [
+      "staging"
+    ],
+    "protectedBranches": [
+      "main"
+    ],
+    "enabled": [],
+    "externalSkills": [],
+    "branchPrefix": "agent/"
+  },
+  "compatibility": {
+    "envPrefix": "CHIMERA",
+    "headerPrefix": "Chimera",
+    "assetNames": {
+      "connector": "/chimera-mcp.mjs",
+      "responder": "/chimera-responder.mjs"
+    }
+  }
+}

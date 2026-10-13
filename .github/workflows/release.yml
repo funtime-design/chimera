@@ -1,0 +1,75 @@
+name: Release
+
+# A tag vX.Y.Z (made by pnpm release:tag) becomes a GitHub Release, but only for a commit that is on main and whose
+# most recent staging deploy passed. Forks track these tags, not main (docs/deploying.md, "Keeping up with releases").
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build:responder
+      - run: pnpm test:engine
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check the tag matches package.json
+        run: test "v$(node -p 'require("./package.json").version')" = "$TAG"
+      - name: Check the tagged commit is on main
+        id: commit
+        run: |
+          sha="$(git rev-parse "$TAG^{commit}")"
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$sha" origin/main || { echo "::error::$TAG ($sha) is not on main"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check the most recent staging deploy of that commit passed
+        run: node bin/release-gate.mjs "${{ steps.commit.outputs.sha }}"
+      - run: pnpm build:responder
+      - name: Collect the release assets
+        run: |
+          mkdir -p dist
+          cp bin/goonbridge-responder.mjs "dist/chimera-responder-$TAG.mjs"
+          node bin/changelog.mjs excerpt "$TAG" > "dist/CHANGELOG-$TAG.md"
+      - name: Create the GitHub Release
+        run: gh release create "$TAG" --verify-tag --title "chimera $TAG" --generate-notes "dist/chimera-responder-$TAG.mjs" "dist/CHANGELOG-$TAG.md"

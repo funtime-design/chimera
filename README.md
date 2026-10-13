@@ -16,7 +16,7 @@ That runs the engine locally against the bundled example deployment and the isol
 
 ## Deployments are folders
 
-A deployment is one folder, `deployments/<id>/`: a public `bridge.config.json` (name, domain, members, devices, timings, labels, integrations), a `deployment.lock.json` that pins its resource identity, and a gitignored `secrets.json`. This repository ships only `deployments/example/`. Your own folder lives in your fork. Select it with the build-time env `CHIMERA_DEPLOYMENT=<id>` (default `example`); every build, generator, the responder and the tests read the deployment through `bin/selected-deployment.mjs`. One checkout can hold several deployment folders, each with its own Worker, domain and secrets.
+A deployment is one folder, `deployments/<id>/`: a public `bridge.config.json` (name, domain, members, devices, timings, labels, integrations), a `deployment.lock.json` that pins its resource identity, and a gitignored `secrets.json`. This repository ships `deployments/example/` and `deployments/staging/` (its own staging bridge; see `docs/deploying.md`, Staging). Your own folder lives in your fork. Select it with the build-time env `CHIMERA_DEPLOYMENT=<id>` (default `example`); every build, generator, the responder and the tests read the deployment through `bin/selected-deployment.mjs`. One checkout can hold several deployment folders, each with its own Worker, domain and secrets.
 
 ## Compatibility names
 

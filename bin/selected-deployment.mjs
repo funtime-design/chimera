@@ -1,7 +1,7 @@
 // The one place that decides which deployments/<id>/ folder a build uses: build-time env CHIMERA_DEPLOYMENT,
 // default "example". Node tools read the config through loadSelectedConfig(); bundlers (Wrangler, esbuild) read
-// src/config/deployment.ts, which writeSelection() points at the same folder. The public tree ships only
-// deployments/example; a private fork adds its own folder and sets CHIMERA_DEPLOYMENT.
+// src/config/deployment.ts, which writeSelection() points at the same folder. The public tree ships
+// deployments/example and deployments/staging; a private fork adds its own folder and sets CHIMERA_DEPLOYMENT.
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';

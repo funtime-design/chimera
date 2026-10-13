@@ -1,0 +1,20 @@
+{
+  "workerName": "chimera-staging",
+  "hubClass": "Hub",
+  "hubBinding": "HUB",
+  "hubKey": "main",
+  "migrationTags": [
+    "v1"
+  ],
+  "kvBinding": "OAUTH_KV",
+  "oauthKvId": null,
+  "origin": "https://chimera-staging.account-subdomain.workers.dev",
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "Hub"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Deploying chimera
 
-Your deployment folder lives in `deployments/<id>/` in your private fork; the public repo ships only `example`. A fork is the public engine plus that folder (and its ignored `secrets.json`). Nothing in the engine assumes any particular deployment is present or absent: every tool reads the deployment named by the build-time env `CHIMERA_DEPLOYMENT` (default `example`) through one loader, `bin/selected-deployment.mjs`. Upgrade the engine by pulling an exact release tag; keep your deployment configuration and resource identity.
+Your deployment folder lives in `deployments/<id>/` in your private fork; the public repo ships `example` and its own `staging` deployment (see Staging below). A fork is the public engine plus that folder (and its ignored `secrets.json`). Nothing in the engine assumes any particular deployment is present or absent: every tool reads the deployment named by the build-time env `CHIMERA_DEPLOYMENT` (default `example`) through one loader, `bin/selected-deployment.mjs`. Upgrade the engine by pulling an exact release tag; keep your deployment configuration and resource identity.
 
 To work on your own deployment locally, export `CHIMERA_DEPLOYMENT=<id>`. `wrangler dev` (its build step), `pnpm build:responder` and `pnpm gen:wrangler` point `src/config/deployment.ts` at `deployments/<id>/`; the responder, client defaults, generated client files and the test harness read the same folder. Commands that take `--deployment` default to it too.
 
@@ -74,7 +74,7 @@ Use the key’s real expiry date in place of the example. This tooling does not 
 
 Set the repository variable `DEPLOYMENT` to your directory ID. The included workflow is skipped while it is unset, so the public repo and forks without a deployment never run it. **Run `pnpm secrets:push -- --deployment <id>` before enabling the first deploy or landing the workflow**, with `contractToken` set in the ignored secrets file. This provisions the required `BRIDGE_CONTRACT_TOKEN` Actions secret. Never put its value in workflow YAML or a shell command argument. The workflow refuses before deployment if it is absent.
 
-The `Deploy` workflow installs dependencies, typechecks, validates config and lock, generates Wrangler config, rebuilds the selected responder, deploys, and checks the live contract. It runs on main pushes or manual dispatch. Set up a custom domain/zone and the API token permissions for your own account before deploying.
+The `Deploy` workflow first checks that the three Actions secrets exist (missing ones fail a fork's deployment and skip staging), then installs dependencies, typechecks, validates config and lock, generates Wrangler config, rebuilds the selected responder, deploys, and checks the live contract. It runs on main pushes or manual dispatch. Set up a custom domain/zone and the API token permissions for your own account before deploying.
 
 For a manual deployment from a trusted shell with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` already exported by your secret manager:
 
@@ -104,6 +104,45 @@ pnpm validate:deployment -- --deployment <id>
 ```
 
 Run the engine integration suite in its isolated test environment before releasing. Do not point it at live deployment data. After upgrading, use the same generation, deployment and contract-check steps above.
+
+## Keeping up with releases
+
+Forks track release tags, not `main`. `main` in the public repo moves on every merge and is only known to work on staging; a tag `vX.Y.Z` is cut from a commit whose staging deploy and smoke passed, and its GitHub Release lists the changes (`CHANGELOG.md`, plus the generated notes) and carries the built responder. To move your fork to a release:
+
+```sh
+git remote add upstream https://github.com/funtime-design/chimera.git   # once
+git fetch upstream --tags
+git rebase vX.Y.Z        # or: git merge vX.Y.Z
+pnpm install --frozen-lockfile
+```
+
+Then run the offline checks from "Upgrade to a tagged release", review the release notes for schema or lock changes, and deploy (merge to your fork's `main`, or the manual steps above). Your `deployments/<id>/` folder and `secrets.json` are yours; a release never touches them.
+
+## Staging
+
+The public repo has three tiers:
+
+- **CI** (`.github/workflows/ci.yml`): every pull request and every push to `main` runs typecheck, the responder build and `pnpm test:engine`. It needs no secrets, so it runs the same on forks.
+- **Staging** (`deployments/staging/`): the public repo's own bridge, hosted on Funtime's Cloudflare account at `https://chimera-staging.<subdomain>.workers.dev`, with neutral members (admin `staging`, member `probe`), no Cloudflare Access and short timings. `Deploy` deploys it on every merge to `main` when the repository variable `DEPLOYMENT` is `staging` and the three Actions secrets exist; otherwise the job is skipped, never red. After the contract check, `pnpm staging:smoke` reads `/docs/status` as the admin, sends one message to `probe` over MCP and reads its thread back, and creates, reads and drops one task. Any failure fails the job.
+- **Release** (`.github/workflows/release.yml`): pushing a tag `vX.Y.Z` runs the neutral suite, checks the tagged commit is on `main`, that `package.json` has that version and that the most recent staging deploy of that commit passed (the `deploy (staging)` job in its latest `Deploy` run, from the Actions API), builds the responder and creates the GitHub Release with generated notes, the responder bundle and the version's `CHANGELOG` section.
+
+A custom domain (planned: staging.chimera.funtime.design) is a later one-field change in deployments/staging/bridge.config.json plus a Cloudflare route; do not add one yet.
+
+Only the public repo deploys staging. A fork sets `DEPLOYMENT` to its own folder; it never sets `staging` and never holds staging secrets. (The `staging` folder in a fork is inert: nothing selects it.)
+
+Cutting a release, from a clean `main`: list the changes under `## [Unreleased]` in `CHANGELOG.md`, then
+
+```sh
+pnpm release:tag -- vX.Y.Z    # bumps package.json, dates the CHANGELOG section, commits, tags; never pushes
+git push origin main          # staging deploys this exact commit
+git push origin vX.Y.Z        # after that Deploy run passes; release.yml refuses otherwise
+```
+
+One-time staging setup (a Funtime Cloudflare admin):
+
+1. Fill in the origin. A workers.dev URL is `https://<worker>.<account subdomain>.workers.dev`; find the subdomain in the Cloudflare dashboard (Workers & Pages > Overview, "Subdomain"), or with `GET /accounts/<account id>/workers/subdomain`. Replace `account-subdomain` in `deployments/staging/bridge.config.json` and `deployment.lock.json` in one pull request (the Worker is not live yet, so changing the locked origin is safe now and never again). `Deploy` refuses while the placeholder is there.
+2. Mint and push the staging secrets with a Funtime minter credential: `CHIMERA_DEPLOYMENT=staging pnpm secrets:mint -- --deployment staging`, then `pnpm secrets:push -- --deployment staging --dry-run` and `pnpm secrets:push -- --deployment staging` (it sets the Worker secrets, and the Actions secrets through `gh secret set`). Record the deploy token's expiry as the mint prints.
+3. Set the repository variable: `gh variable set DEPLOYMENT --body staging`. The next merge to `main` deploys staging.
 
 ## Client policy and compatibility
 
