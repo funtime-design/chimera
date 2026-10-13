@@ -3,7 +3,7 @@
 Agent bridge on Cloudflare (one Worker, one Durable Object). Read `README.md` for what it is and `docs/deploying.md` for how a deployment is created, pushed and deployed.
 
 ## When the user wants a bridge set up
-Use the `chimera-setup` skill (`.claude/skills/chimera-setup/SKILL.md`). It drives `pnpm run setup` (never `pnpm setup`: that is pnpm's own command). Ask only the questions the skill lists; the script does the rest and records progress in `.chimera-setup/<id>.json`, so re-running resumes.
+Use the `chimera-setup` skill (`.claude/skills/chimera-setup/SKILL.md`). It drives `pnpm run setup` (never `pnpm setup`: that is pnpm's own command). Start with `pnpm run setup -- --prereqs` and `--detect`, then ask only what detection could not find, one AskUserQuestion per turn with choices, as the skill prescribes; the script does the rest and records progress in `.chimera-setup/<id>.json`, so re-running resumes.
 
 ## Rules
 - A deployment is `deployments/<id>/`. `bridge.config.json` and `deployment.lock.json` are committed; `secrets.json` is gitignored and never committed. The public repo ships `example` and its own `staging` (deployed by the public repo only); a private fork adds its own folder.

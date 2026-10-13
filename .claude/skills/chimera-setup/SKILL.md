@@ -1,66 +1,189 @@
 ---
 name: chimera-setup
-description: Use when the user asks to set up, stand up, finish setting up, or check the setup of a chimera bridge (a deployment under deployments/<id>/) — "set up my bridge", "resume the bridge setup", "is my bridge set up". Drives `pnpm run setup` non-interactively with an answers file, resumes it, and reads /docs/status.
+description: Use when the user asks to set up, stand up, finish setting up, or check the setup of a chimera bridge (a deployment under deployments/<id>/) — "set up my bridge", "resume the bridge setup", "is my bridge set up". Checks prerequisites, detects what it can, asks one question at a time with choices, drives `pnpm run setup`, and reads /docs/status.
 ---
 
 # Set up a chimera bridge
 
-`bin/setup.mjs` does the work; you collect the answers only a person can give, run it, and report. It records each step in `.chimera-setup/<id>.json` (ignored by git), so it can always be resumed. Use `pnpm run setup`, never `pnpm setup` (that is pnpm's own command and edits the shell profile).
+You are walking a person, possibly a stranger to Cloudflare, through setup. `bin/setup.mjs` does the work. Your job: check what they have, find out everything the machine can tell you, ask only what is left, **one question per turn with the AskUserQuestion tool**, and relay each result in one line.
 
-## 1. Ask the person (only they know these)
+Use `pnpm run setup`, never `pnpm setup` (that is pnpm's own command and edits the shell profile).
 
-- **Deployment id**: folder name under `deployments/`, lowercase, e.g. `acme`. Not `example`.
-- **Display name** of the bridge.
-- **Origin**: the HTTPS address it will live at, e.g. `https://bridge.example.com` (a domain in their Cloudflare account).
-- **Cloudflare account ID** (32 hex characters, from the dashboard).
-- **Worker name** (default `<id>-bridge`).
-- **Admins** and **members**: person names (lowercase, no dash, each used once) and each person's sign-in email. Admins open `/docs/status` and `/docs/settings`, and approve destructive commands.
-- **Cloudflare Access**: is it in front of the bridge? If yes, the Access group id, if they want setup to add the emails through the API.
+## Wording rules
 
-Never ask for tokens or API keys in chat. The person fills those into `deployments/<id>/secrets.json` themselves.
+- Plain language, short sentences. Answer first, detail after.
+- Define a term the first time you use it: "a Worker is the Cloudflare service that runs the bridge"; "Cloudflare Access is a sign-in screen Cloudflare can put in front of a site"; "wrangler is Cloudflare's command-line tool".
+- Never ask for something detection already found. Never ask for the 32-character account ID when wrangler can supply it.
+- Every "go here" is a concrete path or URL, such as "Cloudflare dashboard > Websites" or https://dash.cloudflare.com/profile/api-tokens. Never just "from the dashboard".
+- Never put more than one question in a message, and never send a numbered list of questions. One AskUserQuestion per turn, 2 to 4 options, each with a one-line description. The tool adds "Other" for free text by itself.
+- Never ask for a token in the chat, and never print a secret value. Tokens go into masked prompts in the person's own terminal.
 
-## 2. Write the answers file and run setup
-
-Write the answers to a file outside the repo (it holds emails and the account ID), then run:
+## Step 0: prerequisites (before any question)
 
 ```sh
-pnpm run setup -- --answers /path/to/answers.json
+pnpm run setup -- --prereqs
+```
+
+It prints a short checklist: a tick or a cross per line, then either "All set" or "Next: <the one fix>". Relay the checklist verbatim as a short list. Exit 2 means something required is missing:
+
+- Tell the person the single fix from the "Next:" line (for example `npx wrangler login`, which opens the browser to sign in to Cloudflare; or `brew install node`).
+- Help with the fix if they ask. Then wait for them to say it is done, and run `--prereqs` again. Do not start the questions until it exits 0.
+
+If a tool goes missing later (wrangler, gh), do the same: the single command, wait, run detection again.
+
+## Step 1: detect
+
+```sh
+pnpm run setup -- --detect
+```
+
+It prints JSON. Each field has `value`, `source` (`detected`, `default` or `needs-answer`) and `howToGet` (one sentence: where to find it, or the command). Account IDs are masked; that is fine, setup reads the real one itself. Ask only about fields that are `needs-answer`, plus the questions below that confirm a suggestion (deployment id, display name, admin, people). Skip a question the person already answered.
+
+If `setupInProgress` lists a deployment, ask Q0 first.
+
+## Step 2: the questions, one per turn
+
+Each block is one AskUserQuestion call (single choice). Put the suggested option first.
+
+### Q0. Resume a setup in progress
+
+Only when `fields.setupInProgress.value` is not empty. AskUserQuestion, header "Resume", question "A setup for <id> is already half done. Carry on with it?"
+Options:
+- **Carry on with <id>**: runs `pnpm run setup -- --deployment <id> --resume` and picks up where it stopped.
+- **Start a new bridge**: leaves <id> as it is and sets up a different one.
+
+### Q1. Cloudflare account
+
+Only when `fields.accountId.source` is `needs-answer` and wrangler sees several accounts (`fields.accounts`). AskUserQuestion, header "Account", question "Which Cloudflare account should run the bridge?"
+Options:
+- **<account name>**: one option per account in `fields.accounts`, up to four; the description says "account ending ****<last4>".
+- **<next account name>**: same.
+
+The answer goes in `accountName`.
+
+### Q2. Deployment id
+
+AskUserQuestion, header "Name", question "What short name should this bridge have? It becomes the folder deployments/<name>/."
+Options:
+- **<fields.deployment.value>**: suggested from your git name (or your domain); lowercase, used in file and Worker names.
+- **Something else**: type a name with lowercase letters, digits or dashes (choose Other).
+
+### Q3. Domain
+
+AskUserQuestion, header "Address", question "Where should the bridge live on the web?"
+Options:
+- **bridge.<zone>**: one option per detected domain in `fields.zones` (up to three); "uses a domain already on your Cloudflare account".
+- **No custom domain, use workers.dev**: a free address Cloudflare gives every account, like https://<name>-bridge.<you>.workers.dev.
+
+If `fields.zones.source` is `needs-answer` (domains could not be listed), replace the domain options with **I have a domain on Cloudflare** (they type it via Other; it must show in Cloudflare dashboard > Websites). The answer goes in `origin`: `https://bridge.<zone>`, or the word `workers.dev`.
+
+### Q4. Bridge display name
+
+AskUserQuestion, header "Title", question "What should people see as the bridge's name?"
+Options:
+- **<fields.displayName.value>**: the suggested name; you can change it later in bridge.config.json.
+- **Something else**: type the name (choose Other).
+
+### Q5. Admin
+
+AskUserQuestion, header "Admin", question "Who is the admin? An admin opens the status and settings pages and approves risky commands."
+Options:
+- **Use <git email>**: from `git config user.email`; your person name will be <name>.
+- **Different email**: type a name and email, like `alice alice@example.com` (choose Other).
+
+If `fields.admins` is `needs-answer`, the options are **Type a name and email** (choose Other) and **Use my GitHub email** (read it with `gh api user --jq .email`).
+
+### Q6. Cloudflare Access
+
+AskUserQuestion, header "Sign-in", question "Should people sign in through Cloudflare Access? Cloudflare Access is a sign-in screen Cloudflare can put in front of a site."
+Options:
+- **No, token sign-in only (simplest)**: each person gets a private token; nothing else to set up. You can add Access later.
+- **Yes, it is already in front of this domain**: you already set Access up at https://one.dash.cloudflare.com > Access > Applications; setup lists who to add to the Access group.
+
+The answer goes in `access` (false or true).
+
+### Q7. More people
+
+AskUserQuestion, header "People", question "Anyone else who should use the bridge?"
+Options:
+- **Just me for now**: you can add people later in bridge.config.json and secrets.json.
+- **Add people**: one at a time, a name and sign-in email each.
+
+### Q8. Next person
+
+Only after "Add people", once per person. AskUserQuestion, header "Person", question "Who should we add? Choose Other and type a name and email, like `bob bob@example.com`."
+Options:
+- **Type a name and email**: choose Other; names are lowercase with no dash, each used once.
+- **That's everyone**: stop adding people.
+
+The answers go in `members` as `{ "name", "email" }`.
+
+### Q9. Confirm before anything is written
+
+AskUserQuestion, header "Confirm", with a short summary in the question: name, address, admin, other people, Access yes/no, and "GitHub Actions secrets: yes/no" from `fields.githubActions`.
+Options:
+- **Yes, set it up**: writes the settings and starts the steps.
+- **Change something**: say which answer, then ask that one question again.
+- **Stop here**: nothing is written.
+
+## Step 3: write the answers and run setup
+
+Write only the answers the person gave to a file outside the repo (it holds emails), then run setup. Detection fills the rest (account ID, Worker name, defaults):
+
+```sh
+pnpm run setup -- --answers "$TMPDIR/chimera-answers.json"
 ```
 
 ```json
-{
-  "deployment": "acme",
-  "displayName": "Acme bridge",
-  "origin": "https://bridge.example.com",
-  "accountId": "0123456789abcdef0123456789abcdef",
-  "workerName": "acme-bridge",
-  "admins": [{ "name": "alice", "email": "alice@example.com" }],
-  "members": [{ "name": "bob", "email": "bob@example.com" }],
-  "access": { "enabled": true, "groupId": "<Access group id, optional>" }
-}
+{ "deployment": "acme", "displayName": "Acme bridge", "origin": "https://bridge.example.com",
+  "admins": [{ "name": "alice", "email": "alice@example.com" }], "members": [], "access": false }
 ```
 
-Delete the answers file once the config step is done. Exit codes: **0** done; **2** waiting for the person; **1** error (the message says what to fix; it never contains a secret).
+Delete the answers file once step 1 is done. Exit codes: **0** done; **2** waiting for the person; **1** error (the message says what to fix; it never holds a secret). Exit 2 with "needs-answer: a, b" lists exactly the fields still missing, each with where to get it: ask those, one question per turn, and run again.
 
-## 3. When it pauses (exit 2)
+Setup prints "Step N of M: <what>" and a "Result:" line per step. Relay each step's result in one line, for example "Step 1 of 7, writing the bridge settings: done."
 
-- **Secrets to fill**: it lists key names (e.g. `GOONBRIDGE_TOKENS.alice`, `CLOUDFLARE_API_TOKEN`). Tell the person to fill them in `deployments/<id>/secrets.json` (tokens: 24+ random characters, e.g. `openssl rand -hex 24`; the Cloudflare token must be able to deploy this Worker). Or have them run `pnpm secrets:mint -- --deployment <id>` in their own terminal: it generates the member tokens and mints the deploy token from one minter token (asked masked), or `pnpm secrets:fill -- --deployment <id>` for values they already hold. Never ask for a token in chat.
-- **Confirmation**: pushing secrets and deploying change live systems. Show the person the dry-run list it printed, get a yes, then resume with `--yes`.
+## Step 4: the tokens
 
-```sh
-pnpm run setup -- --deployment <id> --resume          # continue; stops before push/deploy
-pnpm run setup -- --deployment <id> --resume --yes    # after the person said yes
-```
+Setup pauses at step 2 (exit 2) until the tokens exist. One master token makes all the others. Ask:
 
-Re-running when everything is done prints the status and exits 0.
+### Q10. Master token
 
-## 4. Cloudflare Access
+AskUserQuestion, header "Token", question "Create the one master token now? Go to https://dash.cloudflare.com/profile/api-tokens > Create Token > Create Custom Token, add the permission Account: API Tokens: Edit (no other permissions), TTL 1 year, then Continue to summary > Create Token. Keep it in your password manager."
+Options:
+- **I have it, run mint**: I'll paste it into the masked prompt (typing stays hidden).
+- **Show me the steps again**: the same steps, one per line.
+- **Skip, I'll use existing tokens via secrets:fill**: for tokens you already hold.
 
-If Access is on, each person must also be in the Access group. Setup prints "add <email> to the Access group" per person (step status `manual`), or does it through the API when `CLOUDFLARE_ACCESS_TOKEN` (a token that can edit Access groups) is set in the environment and the answers name `access.groupId`. The person sets that token; you never print it.
+Then:
 
-## 5. Check the live bridge
+- **Run mint.** Check for a terminal first: `node -e "process.exit(process.stdin.isTTY ? 0 : 1)"`. With a terminal (exit 0), run `pnpm secrets:mint -- --deployment <id>` there; the person pastes the token into the masked prompt. Without one (exit 1, the usual case in an agent's shell), tell the person the single command to run in their own terminal, in this folder: `pnpm secrets:mint -- --deployment <id>`, and wait until they say it finished.
+- **Skip**: the same, with `pnpm secrets:fill -- --deployment <id>`.
+- Never ask for a token in chat. Never read secrets.json aloud.
+- Then: `pnpm run setup -- --deployment <id> --resume`.
 
-After deploy, an admin's token or Access sign-in reads `GET <origin>/docs/status`:
+`secrets:mint` against a bridge that is already live replaces every token on it; everyone signs in again.
+
+## Step 5: push and deploy
+
+Setup stops before it changes anything live and prints what it would push. Ask:
+
+### Q11. Push and deploy
+
+AskUserQuestion, header "Go live", question "Setup is ready to send the secrets to Cloudflare and put the bridge online. Go ahead?"
+Options:
+- **Yes, push and deploy**: runs `pnpm run setup -- --deployment <id> --resume --yes`.
+- **Not yet**: nothing changes; resume any time with the same command.
+
+Re-running when everything is done prints the status and exits 0. `--resume` always starts with a done/todo checklist; relay it as a short list.
+
+## Step 6: Cloudflare Access (only if Q6 was yes)
+
+Each person must also be in the Access group. Setup prints "add <email> to the Access group" per person (Zero Trust > Access > Access groups at https://one.dash.cloudflare.com), or does it through the API when `CLOUDFLARE_ACCESS_TOKEN` (a token that can edit Access groups) is set and the answers name `access.groupId`.
+
+## Step 7: check the live bridge
+
+An admin's token or Access sign-in reads `GET <origin>/docs/status`:
 
 ```json
 { "deployment": "acme", "version": { "engine": "0.1.0", "schema": 2, "build": "..." }, "members": 2, "devices_registered": 0, "last_contract_check": "2026-10-13T...", "access": true }

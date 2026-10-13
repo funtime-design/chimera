@@ -1,6 +1,7 @@
 import { argsFor, cli, isMain, loadDeployment, projectRoot, readJson, requirePrivateSecrets, runCommand, validation } from './deployment.mjs';
 
-export async function pushSecrets({ root = projectRoot, deployment, dryRun = false, run = runCommand, log = console.log }) {
+// github: false skips the GitHub Actions secrets (no gh, or no deploys from Actions).
+export async function pushSecrets({ root = projectRoot, deployment, dryRun = false, github = true, run = runCommand, log = console.log }) {
   const file = await requirePrivateSecrets(root, deployment);
   const { config } = await loadDeployment({ root, deployment });
   const { validateSecrets, runtimeSecrets } = await validation();
@@ -8,9 +9,9 @@ export async function pushSecrets({ root = projectRoot, deployment, dryRun = fal
   const runtime = runtimeSecrets(secrets, config);
   const plan = [
     ...Object.keys(runtime).sort().map(name => ({ name, command: 'npx', args: ['wrangler', 'secret', 'put', name, '--name', config.cloudflare.workerName], value: runtime[name], target: 'Worker' })),
-    { name: 'BRIDGE_CONTRACT_TOKEN', command: 'gh', args: ['secret', 'set', 'BRIDGE_CONTRACT_TOKEN'], value: secrets.GOONBRIDGE_TOKENS[secrets.contractToken], target: 'GitHub Actions' },
+    ...(github ? [{ name: 'BRIDGE_CONTRACT_TOKEN', command: 'gh', args: ['secret', 'set', 'BRIDGE_CONTRACT_TOKEN'], value: secrets.GOONBRIDGE_TOKENS[secrets.contractToken], target: 'GitHub Actions' },
     { name: 'CLOUDFLARE_ACCOUNT_ID', command: 'gh', args: ['secret', 'set', 'CLOUDFLARE_ACCOUNT_ID'], value: secrets.cloudflare.accountId, target: 'GitHub Actions' },
-    { name: 'CLOUDFLARE_API_TOKEN', command: 'gh', args: ['secret', 'set', 'CLOUDFLARE_API_TOKEN'], value: secrets.CLOUDFLARE_API_TOKEN, target: 'GitHub Actions' },
+    { name: 'CLOUDFLARE_API_TOKEN', command: 'gh', args: ['secret', 'set', 'CLOUDFLARE_API_TOKEN'], value: secrets.CLOUDFLARE_API_TOKEN, target: 'GitHub Actions' }] : []),
   ];
   for (const step of plan) {
     log(`${dryRun ? 'Would set' : 'Setting'} ${step.name} (${step.target})`);

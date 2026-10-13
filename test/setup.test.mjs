@@ -9,6 +9,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile, access } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setup } from '../bin/setup.mjs';
+import { detect } from '../bin/setup-detect.mjs';
 
 const hex = n => randomBytes(n).toString('hex');
 const SECRET = {
@@ -46,13 +47,32 @@ function bridge({ fail } = {}) {
   };
   return { fetchImpl, seen };
 }
+// Detection on a stubbed machine: wrangler logged in to one account (SECRET.account), gh logged in, given zones.
+const DETECT_TOKEN = `oauth_${hex(16)}`;
+function detector({ loggedIn = true, zones = ['example.test'], git = false, gh = true, nodeVersion = '22.18.0' } = {}) {
+  const commands = {
+    'npx wrangler whoami --json': loggedIn ? { code: 0, stdout: JSON.stringify({ loggedIn: true, accounts: [{ id: SECRET.account, name: 'Acme Account' }] }) } : { code: 1, stdout: '{"loggedIn":false}' },
+    'npx wrangler auth token --json': { code: loggedIn ? 0 : 1, stdout: loggedIn ? JSON.stringify({ type: 'oauth', token: DETECT_TOKEN }) : '' },
+    'pnpm --version': { code: 0, stdout: '10.4.1' },
+    ...(gh ? { 'gh auth status': { code: 0, stdout: 'Logged in to github.com account acmegh' } } : {}),
+    ...(git ? { 'git config user.email': { code: 0, stdout: EMAIL.alice }, 'git config user.name': { code: 0, stdout: 'Alice' } } : {}),
+  };
+  const run = async (cmd, args) => commands[[cmd, ...args].join(' ')] ?? { code: 127, stdout: '', stderr: '' };
+  const fetchImpl = async url => {
+    const u = new URL(url);
+    if (u.pathname === '/client/v4/zones') return Response.json({ success: true, result: zones.map(name => ({ name })) });
+    if (u.pathname.endsWith('/workers/subdomain')) return Response.json({ success: true, result: { subdomain: 'acme-sub' } });
+    return Response.json({ success: false }, { status: 404 });
+  };
+  return ({ answers }) => detect({ root: tmpdir(), run, fetchImpl, env: {}, nodeVersion, answers });
+}
 // Runs setup once; returns exit code and everything it printed (console included, for stray prints).
 async function runSetup(root, argv, options = {}) {
   const lines = [];
   const original = { log: console.log, error: console.error, warn: console.warn };
   console.log = console.error = console.warn = (...a) => lines.push(a.join(' '));
   try {
-    const code = await setup({ root, argv, isTTY: false, run: async () => {}, fetchImpl: bridge().fetchImpl, env: {}, out: l => lines.push(l), err: l => lines.push(l), ...options });
+    const code = await setup({ root, argv, isTTY: false, run: async () => {}, fetchImpl: bridge().fetchImpl, env: {}, detector: detector(), out: l => lines.push(l), err: l => lines.push(l), ...options });
     return { code, text: lines.join('\n') };
   } finally { Object.assign(console, original); }
 }
@@ -158,13 +178,13 @@ test('person names are checked: no dash, never reused, and nothing is written', 
   }
   assert.ok(!await exists(path.join(root, 'deployments/acme')), 'no files written for bad answers');
   const noTty = await runSetup(root, []);
-  assert.equal(noTty.code, 1);
-  assert.match(noTty.text, /not a terminal: pass --answers/);
+  assert.equal(noTty.code, 2, noTty.text);
+  assert.match(noTty.text, /needs-answer\): access, admins, origin$/m);
 });
 
 test('on a terminal it asks, re-asking for a dashed or reused name', async t => {
   const root = await sandbox(t);
-  const replies = ['acme', 'Acme bridge', 'https://bridge.example.test', SECRET.account, '', 'alice', EMAIL.alice, 'bob-smith', 'alice', 'bob', EMAIL.bob, 'n'];
+  const replies = ['acme', 'Acme bridge', '1', '', 'alice', EMAIL.alice, 'bob-smith', 'alice', 'bob', EMAIL.bob, 'n'];
   const asked = [];
   const prompt = async q => { asked.push(q); return replies.shift() ?? ''; };
   const r = await runSetup(root, [], { isTTY: true, prompt });
@@ -173,6 +193,9 @@ test('on a terminal it asks, re-asking for a dashed or reused name', async t => 
   assert.match(r.text, /each person name is used once: alice/);
   const config = await read(root, 'deployments/acme/bridge.config.json');
   assert.equal(config.cloudflare.workerName, 'acme-bridge', 'default Worker name');
+  assert.equal(config.deployment.origin, 'https://bridge.example.test', 'the detected domain, picked by number');
+  assert.equal((await read(root, 'deployments/acme/secrets.json')).cloudflare.accountId, SECRET.account, 'account ID detected, never asked');
+  assert.ok(!asked.some(q => /account ID/i.test(q)), 'no account ID question when wrangler knows it');
   assert.deepEqual(config.members.map(m => m.name), ['alice', 'bob']);
   noSecrets(r.text, 'terminal run');
 });
@@ -272,4 +295,64 @@ test('with a minter token, setup fills the new secrets.json through secrets:mint
   for (const v of [minter, minted, ...Object.values(secrets.GOONBRIDGE_TOKENS), secrets.GOONBRIDGE_GITHUB_WEBHOOK_SECRET]) assert.ok(!r.text.includes(v), 'no value printed');
   noSecrets(r.text, 'mint in setup');
   assert.equal((await stateClean(root)).steps.secrets.status, 'done');
+});
+
+test('step 0 and detection: partial answers exit 2 listing exactly the missing fields, and nothing is written', async t => {
+  const root = await sandbox(t);
+  const r = await runSetup(root, ['--answers', await answersFile(root, { deployment: 'acme', admins: [{ name: 'alice', email: EMAIL.alice }] })]);
+  assert.equal(r.code, 2, r.text);
+  assert.match(r.text, /Step 0: checking what you have/);
+  assert.match(r.text, /needs-answer\): access, origin$/m);
+  assert.match(r.text, /- origin: .*workers\.dev/);
+  assert.match(r.text, /- access: .*Cloudflare Access/);
+  assert.ok(!await exists(path.join(root, 'deployments/acme')), 'nothing written while answers are missing');
+  noSecrets(r.text, 'needs-answer');
+  assert.ok(!r.text.includes(DETECT_TOKEN), 'detect token never printed');
+});
+
+test('step 0 stops on the first missing prerequisite with its fix, before any question', async t => {
+  const root = await sandbox(t);
+  const asked = [];
+  const r = await runSetup(root, [], { isTTY: true, prompt: async q => { asked.push(q); return ''; }, detector: detector({ loggedIn: false }) });
+  assert.equal(r.code, 2, r.text);
+  assert.match(r.text, /✗ wrangler logged in/);
+  assert.match(r.text, /Next: run `npx wrangler login`/);
+  assert.match(r.text, /Run again when done/);
+  assert.deepEqual(asked, [], 'no question before the prerequisites pass');
+  const only = await runSetup(root, ['--prereqs'], { detector: detector({ nodeVersion: '20.1.0' }) });
+  assert.equal(only.code, 2);
+  assert.match(only.text, /✗ Node/);
+  const fine = await runSetup(root, ['--prereqs']);
+  assert.equal(fine.code, 0, fine.text);
+  assert.match(fine.text, /All set/);
+});
+
+test('--detect prints JSON with the account masked; detection fills a workers.dev origin; no gh skips GitHub secrets', async t => {
+  const root = await sandbox(t);
+  const d = await runSetup(root, ['--detect']);
+  assert.equal(d.code, 0);
+  const report = JSON.parse(d.text);
+  assert.equal(report.fields.accountId.source, 'detected');
+  assert.ok(!d.text.includes(SECRET.account) && !d.text.includes(DETECT_TOKEN), 'no account ID or token in --detect');
+
+  const r = await runSetup(root, ['--answers', await answersFile(root, { deployment: 'acme', displayName: 'Acme', admins: [{ name: 'alice', email: EMAIL.alice }], origin: 'workers.dev', access: false })],
+    { detector: detector({ zones: [], gh: false }) });
+  assert.equal(r.code, 2, r.text);
+  assert.match(r.text, /Step 1 of 7: writing the bridge settings/);
+  assert.match(r.text, /Result: done/);
+  assert.match(r.text, /Step 2 of 7: creating the secrets file/);
+  assert.match(r.text, /secrets:mint -- --deployment acme in your own terminal/);
+  const config = await read(root, 'deployments/acme/bridge.config.json');
+  assert.equal(config.deployment.origin, 'https://acme-bridge.acme-sub.workers.dev');
+  assert.equal(config.cloudflare.workersDev, true);
+  assert.equal((await read(root, 'deployments/acme/secrets.json')).cloudflare.accountId, SECRET.account);
+  await fillSecrets(root, { GOONBRIDGE_TOKENS: { alice: SECRET.alice } });
+  const calls = [];
+  const resumed = await runSetup(root, ['--deployment', 'acme', '--resume', '--yes'], { run: async (c, args) => { calls.push(c); } });
+  assert.match(resumed.text, /^Where setup stands for acme:\n  \[done\] writing the bridge settings/m);
+  assert.match(resumed.text, /\[todo\] creating the secrets file/);
+  assert.match(resumed.text, /GitHub Actions secrets are skipped/);
+  assert.equal(resumed.code, 0, resumed.text);
+  assert.ok(calls.includes('npx') && !calls.includes('gh'), 'Worker secrets pushed, no gh call without gh');
+  noSecrets(d.text + r.text + resumed.text, 'detect flow');
 });

@@ -6,15 +6,23 @@ To work on your own deployment locally, export `CHIMERA_DEPLOYMENT=<id>`. `wrang
 
 ## Set up with `pnpm run setup`
 
-`pnpm run setup` (bin/setup.mjs; not `pnpm setup`, which is pnpm's own command) stands up a deployment from a short questionnaire and then runs every step below in order. On a terminal it asks; an agent passes the answers as a file (the `chimera-setup` skill in `.claude/skills/` shows the format):
+`pnpm run setup` (bin/setup.mjs; not `pnpm setup`, which is pnpm's own command) stands up a deployment and then runs every step below in order. With an agent, the `chimera-setup` skill in `.claude/skills/` drives it: prerequisites, detection, then one question per turn with choices.
 
 ```sh
+pnpm run setup -- --prereqs                            # step 0: the checklist only
+pnpm run setup -- --detect                             # what setup can find out by itself, as JSON
 pnpm run setup                                         # interactive
-pnpm run setup -- --answers answers.json               # non-interactive
+pnpm run setup -- --answers answers.json               # non-interactive; detection fills what the file leaves out
 pnpm run setup -- --deployment <id> --resume [--yes]   # continue where it stopped
 ```
 
-It asks for the deployment id, display name, origin, Cloudflare account ID, Worker name, admins and members (person names: lowercase, no dash, each used once) and each person's sign-in email, and whether Cloudflare Access guards the bridge. It writes `deployments/<id>/bridge.config.json` and `deployment.lock.json` (commit both), and creates the ignored `secrets.json` holding the emails and account ID, with placeholders for the tokens. With a minter token at hand (`CHIMERA_TOKEN_MINTER`, or asked masked on a terminal) it then runs `secrets:mint` to fill them; otherwise it stops and lists what to fill. Then: validate, generate (Wrangler config, client files, responder), `secrets:push` (dry run, then the real push after a yes), `wrangler deploy` (after a yes), and the contract check. Each step prints what it does, runs, verifies and records done/todo in `.chimera-setup/<id>.json` (ignored). `--yes` answers the two confirmations for a non-interactive run. Exit 0 is done; exit 2 means it waits for a person (fill the listed `secrets.json` keys, or confirm); exit 1 is an error. A finished setup re-run prints its status and exits 0. No secret value is ever printed.
+**Step 0, prerequisites.** A new setup starts with a checklist, a tick or a cross per line: Node 22 or newer, pnpm, a Cloudflare account (it runs the bridge; https://dash.cloudflare.com/sign-up, the free plan is enough), wrangler logged in to it (`npx wrangler login` opens the browser), and, optional, `gh` logged in (only to deploy from GitHub Actions; without it setup skips the GitHub secrets), a domain on the account (else a free workers.dev address), and a password manager for the master token. It stops on the first missing required line with its single fix; run it again when done.
+
+**Detection.** Before asking anything, setup reads what this machine and Cloudflare can tell it (`bin/setup-detect.mjs`): the account from `npx wrangler whoami`, the domains on that account and the workers.dev subdomain (Cloudflare API, with wrangler's own login token, never printed), the git name and email as the first admin, existing deployment folders, setups in progress, and the Node version. Each field is `detected`, `default` or `needs-answer`, with one sentence on where to get it. `--detect` prints this as JSON with account IDs masked.
+
+**Answers.** `--answers` wins, detection fills the rest; `"origin": "workers.dev"` means the free address `https://<worker>.<subdomain>.workers.dev`. On a terminal it asks only what is left, offering the suggestions. Without a terminal, missing answers exit 2 with "needs-answer: <fields>" and where to get each. The answers are the deployment id, display name, address, admins and members (person names: lowercase, no dash, each used once, and each person's sign-in email), and whether Cloudflare Access guards the bridge; the account ID and Worker name come from detection.
+
+**Steps.** Each prints "Step N of M: <what>" and a "Result:" line, and records done/todo in `.chimera-setup/<id>.json` (ignored); `--resume` prints that done/todo checklist first. It writes `deployments/<id>/bridge.config.json` and `deployment.lock.json` (commit both), and creates the ignored `secrets.json` holding the emails and account ID, with placeholders for the tokens. With a minter token at hand (`CHIMERA_TOKEN_MINTER`, or asked masked on a terminal) it then runs `secrets:mint` to fill them; otherwise it stops and says to run `pnpm secrets:mint -- --deployment <id>` in your own terminal, with the exact place to create the master token. Then: validate, generate (Wrangler config, client files, responder), `secrets:push` (dry run, then the real push after a yes), `wrangler deploy` (after a yes), and the contract check. `--yes` answers the two confirmations for a non-interactive run. Exit 0 is done; exit 2 means it waits for a person (a prerequisite, an answer, the tokens, or a confirmation); exit 1 is an error. A finished setup re-run prints its status and exits 0. No secret value is ever printed.
 
 ### Bridge roles
 
