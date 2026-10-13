@@ -1,0 +1,102 @@
+{
+  "$schema": "../../../config/bridge.config.schema.json",
+  "schemaVersion": 1,
+  "deployment": {
+    "id": "example",
+    "displayName": "Example bridge",
+    "origin": "https://example.com"
+  },
+  "cloudflare": {
+    "workerName": "example",
+    "workersDev": false,
+    "previewUrls": false,
+    "observability": true
+  },
+  "identity": {
+    "hubClass": "Hub",
+    "hubBinding": "HUB",
+    "hubKey": "main"
+  },
+  "members": [
+    {
+      "name": "alice",
+      "kind": "person"
+    },
+    {
+      "name": "bob",
+      "kind": "person"
+    },
+    {
+      "name": "outsider",
+      "kind": "service"
+    },
+    {
+      "name": "alice-laptop",
+      "kind": "device",
+      "person": "alice"
+    },
+    {
+      "name": "alice-mini",
+      "kind": "device",
+      "person": "alice"
+    },
+    {
+      "name": "alice-cloud",
+      "kind": "device",
+      "person": "alice"
+    },
+    {
+      "name": "bob-mac",
+      "kind": "device",
+      "person": "bob"
+    },
+    {
+      "name": "bob-cloud",
+      "kind": "device",
+      "person": "bob"
+    }
+  ],
+  "auth": {
+    "staticTokensSecret": {
+      "env": "TEST_TOKENS"
+    },
+    "memberEmails": {
+      "env": "TEST_MEMBERS"
+    }
+  },
+  "timing": {
+    "claimSeconds": 900,
+    "claimLeaseSeconds": 300,
+    "bootSeconds": 300,
+    "onlineSeconds": 180,
+    "statusExpirySeconds": 28800,
+    "deploySeconds": 900
+  },
+  "github": {
+    "owner": "example",
+    "deployWorkflow": "Deploy",
+    "autoReview": false
+  },
+  "clients": {
+    "connectorName": "chimera",
+    "launchdLabel": "com.example.chimera-responder",
+    "stateDirName": ".chimera"
+  },
+  "hooks": {
+    "approver": "alice",
+    "protectedBranches": [
+      "main"
+    ],
+    "enabled": [],
+    "externalSkills": [],
+    "branchPrefix": "agent/"
+  },
+  "compatibility": {
+    "envPrefix": "CHIMERA",
+    "headerPrefix": "Chimera",
+    "assetNames": {
+      "connector": "/chimera-mcp.mjs",
+      "responder": "/chimera-responder.mjs"
+    }
+  }
+}

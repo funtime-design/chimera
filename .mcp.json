@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "chimera": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CHIMERA_TOKEN:-}",
+        "Chimera-Session": "${CLAUDE_CODE_REMOTE_SESSION_ID:-}",
+        "Chimera-Context": "example"
+      }
+    }
+  }
+}

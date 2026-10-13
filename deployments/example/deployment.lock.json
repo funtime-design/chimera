@@ -1,0 +1,20 @@
+{
+  "workerName": "example-bridge",
+  "hubClass": "Hub",
+  "hubBinding": "HUB",
+  "hubKey": "main",
+  "migrationTags": [
+    "v1"
+  ],
+  "kvBinding": "OAUTH_KV",
+  "oauthKvId": null,
+  "origin": "https://example.com",
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "Hub"
+      ]
+    }
+  ]
+}

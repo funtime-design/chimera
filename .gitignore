@@ -1,0 +1,23 @@
+node_modules/
+.wrangler/
+.dev.vars
+.goonbridge-test/
+.crossverify/
+# Fetched from compound-loop on session start (.claude/hooks/fetch-external-skills.sh); never committed.
+.claude/skills/gaps/
+
+# Isolated neutral engine harness (no owner test state).
+.chimera-test/
+
+# Private inputs used only by bin/secrets-push.mjs.
+deployments/*/secrets.json
+
+# Account-bearing generated deployment config; never include in backups through git.
+.generated/
+
+# Owner-only material kept out of the public tree: private deployment folders, owner-mode test baselines, notes.
+.private/
+
+# The configured checkout copy of the responder; only the committed asset alias is tracked. Rebuild with pnpm build:responder.
+/bin/*-responder.mjs
+!/bin/goonbridge-responder.mjs

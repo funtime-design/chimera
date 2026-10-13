@@ -1,0 +1,70 @@
+name: Branch cleanup
+
+# Deletes branches whose PR was merged more than GRACE_DAYS ago. Daily at 06:17 UTC, or run it by hand from the Actions tab.
+# Manual runs default to a dry run (logs what it would delete). Scheduled runs delete for real unless the repo variable
+# BRANCH_CLEANUP_DRY_RUN is "true", so watch a dry run first.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only log what would be deleted"
+        type: boolean
+        default: true
+      grace_days:
+        description: "Days after merge before a branch is deleted (default 7)"
+        type: string
+        default: "7"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: branch-cleanup
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          GRACE_DAYS: ${{ inputs.grace_days || vars.BRANCH_CLEANUP_GRACE_DAYS || '7' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || vars.BRANCH_CLEANUP_DRY_RUN == 'true' }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const grace = Number(process.env.GRACE_DAYS);
+            if (!Number.isFinite(grace) || grace < 0) throw new Error(`bad GRACE_DAYS: ${process.env.GRACE_DAYS}`);
+            const dry = process.env.DRY_RUN === "true";
+            const cutoff = Date.now() - grace * 86400_000;
+            const defaultBranch = context.payload.repository.default_branch;
+            core.info(`grace ${grace}d, ${dry ? "DRY RUN" : "deleting"}, default branch ${defaultBranch}`);
+
+            const open = await github.paginate(github.rest.pulls.list, { owner, repo, state: "open", per_page: 100 });
+            const openHeads = new Set(open.map((p) => p.head.ref));
+            const closed = await github.paginate(github.rest.pulls.list, { owner, repo, state: "closed", per_page: 100 });
+
+            const seen = new Set();
+            for (const pr of closed) {
+              const branch = pr.head.ref;
+              if (seen.has(branch)) continue;
+              seen.add(branch);
+              if (!pr.merged_at) continue;                                  // closed without merging: keep
+              if (pr.head.repo?.full_name !== `${owner}/${repo}`) continue; // fork branch: not ours
+              if (branch === defaultBranch || openHeads.has(branch)) continue;
+              if (Date.parse(pr.merged_at) > cutoff) { core.info(`keep ${branch}: merged ${pr.merged_at}, inside grace`); continue; }
+              let b;
+              try {
+                b = (await github.rest.repos.getBranch({ owner, repo, branch })).data;
+              } catch (e) {
+                if (e.status === 404) continue; // already gone
+                throw e;
+              }
+              if (b.protected) { core.info(`keep ${branch}: protected`); continue; }
+              if (b.commit.sha !== pr.head.sha) { core.info(`keep ${branch}: has commits after the merged PR #${pr.number}`); continue; }
+              if (dry) { core.info(`WOULD delete ${branch} (PR #${pr.number}, merged ${pr.merged_at})`); continue; }
+              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch}` });
+              core.info(`deleted ${branch} (PR #${pr.number}, merged ${pr.merged_at})`);
+            }

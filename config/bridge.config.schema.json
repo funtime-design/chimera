@@ -1,0 +1,790 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "chimera deployment configuration",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "deployment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "not": {
+            "const": "all"
+          }
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1,
+          "format": "https-origin",
+          "pattern": "^https://[^/?#@\\s]+$"
+        },
+        "productName": {
+          "type": "string",
+          "minLength": 1,
+          "default": "chimera"
+        }
+      },
+      "required": [
+        "id",
+        "displayName",
+        "origin"
+      ],
+      "additionalProperties": false
+    },
+    "cloudflare": {
+      "type": "object",
+      "properties": {
+        "workerName": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "not": {
+            "const": "all"
+          }
+        },
+        "oauthKvId": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-fA-F0-9]{32}$"
+        },
+        "workersDev": {
+          "type": "boolean"
+        },
+        "previewUrls": {
+          "type": "boolean"
+        },
+        "observability": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "workerName",
+        "workersDev",
+        "previewUrls",
+        "observability"
+      ],
+      "additionalProperties": false
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "hubClass": {
+          "const": "Hub"
+        },
+        "hubBinding": {
+          "const": "HUB"
+        },
+        "hubKey": {
+          "const": "main"
+        }
+      },
+      "required": [
+        "hubClass",
+        "hubBinding",
+        "hubKey"
+      ],
+      "additionalProperties": false
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "not": {
+              "const": "all"
+            }
+          },
+          "kind": {
+            "enum": [
+              "person",
+              "device",
+              "service"
+            ]
+          },
+          "person": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "not": {
+              "const": "all"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "memberEmails": {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "additionalProperties": false
+        },
+        "staticTokensSecret": {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "staticTokensSecret"
+      ],
+      "additionalProperties": false
+    },
+    "access": {
+      "type": "object",
+      "properties": {
+        "clientId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clientSecret": {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "additionalProperties": false
+        },
+        "authorizationUrl": {
+          "type": "string",
+          "minLength": 1,
+          "format": "https-url",
+          "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$"
+        },
+        "tokenUrl": {
+          "type": "string",
+          "minLength": 1,
+          "format": "https-url",
+          "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$"
+        },
+        "jwksUrl": {
+          "type": "string",
+          "minLength": 1,
+          "format": "https-url",
+          "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$"
+        },
+        "pages": {
+          "type": "object",
+          "properties": {
+            "issuer": {
+              "type": "string",
+              "minLength": 1,
+              "format": "https-url",
+              "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$"
+            },
+            "audience": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "issuer",
+            "audience"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "timing": {
+      "type": "object",
+      "properties": {
+        "claimSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "claimLeaseSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "bootSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "onlineSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "statusExpirySeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "deploySeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "claimSeconds",
+        "claimLeaseSeconds",
+        "bootSeconds",
+        "onlineSeconds",
+        "statusExpirySeconds",
+        "deploySeconds"
+      ],
+      "additionalProperties": false
+    },
+    "github": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deployWorkflow": {
+          "type": "string",
+          "minLength": 1
+        },
+        "autoReview": {
+          "type": "boolean"
+        },
+        "webhookSecret": {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "additionalProperties": false
+        },
+        "deployEnvironment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewersMax": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "owner",
+        "deployWorkflow",
+        "autoReview"
+      ],
+      "additionalProperties": false
+    },
+    "cloud": {
+      "type": "object",
+      "properties": {
+        "routines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "trigger": {
+                "type": "object",
+                "properties": {
+                  "env": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[A-Z_][A-Z0-9_]*$"
+                  }
+                },
+                "required": [
+                  "env"
+                ],
+                "additionalProperties": false
+              },
+              "token": {
+                "type": "object",
+                "properties": {
+                  "env": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[A-Z_][A-Z0-9_]*$"
+                  }
+                },
+                "required": [
+                  "env"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "trigger",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "not": {
+              "const": "all"
+            }
+          }
+        },
+        "routinesSecret": {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "additionalProperties": false
+        },
+        "namedRoutines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "trigger": {
+                "type": "object",
+                "properties": {
+                  "env": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[A-Z_][A-Z0-9_]*$"
+                  }
+                },
+                "required": [
+                  "env"
+                ],
+                "additionalProperties": false
+              },
+              "token": {
+                "type": "object",
+                "properties": {
+                  "env": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[A-Z_][A-Z0-9_]*$"
+                  }
+                },
+                "required": [
+                  "env"
+                ],
+                "additionalProperties": false
+              },
+              "allow": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                  "not": {
+                    "const": "all"
+                  }
+                }
+              }
+            },
+            "required": [
+              "trigger",
+              "token"
+            ],
+            "additionalProperties": false
+          },
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9]+$"
+          }
+        },
+        "configBundle": {
+          "type": "object",
+          "properties": {
+            "repo": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+            },
+            "commit": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "pat": {
+              "type": "object",
+              "properties": {
+                "env": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[A-Z_][A-Z0-9_]*$"
+                }
+              },
+              "required": [
+                "env"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "repo",
+            "commit",
+            "pat"
+          ],
+          "additionalProperties": false
+        },
+        "legacyConfigRepo": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "configPat": {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            }
+          },
+          "required": [
+            "env"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "clients": {
+      "type": "object",
+      "properties": {
+        "connectorName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "launchdLabel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stateDirName": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^\\.[a-zA-Z0-9_-]+$"
+        }
+      },
+      "required": [
+        "connectorName",
+        "launchdLabel",
+        "stateDirName"
+      ],
+      "additionalProperties": false
+    },
+    "hooks": {
+      "type": "object",
+      "properties": {
+        "approver": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "not": {
+            "const": "all"
+          }
+        },
+        "protectedBranches": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "enabled": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "externalSkills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repo": {
+                "type": "string",
+                "minLength": 1
+              },
+              "commit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "repo",
+              "commit",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "branchPrefix": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "approver",
+        "protectedBranches",
+        "enabled",
+        "externalSkills"
+      ],
+      "additionalProperties": false
+    },
+    "compatibility": {
+      "type": "object",
+      "properties": {
+        "envPrefix": {
+          "type": "string",
+          "enum": [
+            "GOONBRIDGE",
+            "CHIMERA"
+          ]
+        },
+        "headerPrefix": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9-]*$"
+        },
+        "assetNames": {
+          "type": "object",
+          "properties": {
+            "connector": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^/[a-zA-Z0-9._-]+\\.mjs$"
+            },
+            "responder": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^/[a-zA-Z0-9._-]+\\.mjs$"
+            }
+          },
+          "required": [
+            "connector",
+            "responder"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "envPrefix",
+        "headerPrefix",
+        "assetNames"
+      ],
+      "additionalProperties": false
+    },
+    "presentation": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerDisplayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerDisplayText": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerPossessive": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerSubject": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerObject": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exampleDevice": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exampleSecondDevice": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exampleCloud": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exampleSession": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exampleRepo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "examplePeer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "responderCommand": {
+          "type": "string",
+          "minLength": 1
+        },
+        "guideIntroduction": {
+          "type": "string"
+        },
+        "guideCloudSetup": {
+          "type": "string"
+        },
+        "guideExternalSkills": {
+          "type": "string"
+        },
+        "guideWebhookSetup": {
+          "type": "string"
+        },
+        "guideBackfill": {
+          "type": "string"
+        },
+        "guideTokenStorage": {
+          "type": "string"
+        },
+        "guideRoutineSecrets": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "labels": {
+      "type": "object",
+      "properties": {
+        "ciRed": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "not": {
+            "const": "all"
+          }
+        },
+        "branchGone": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "not": {
+            "const": "all"
+          }
+        },
+        "deployFailed": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "not": {
+            "const": "all"
+          }
+        },
+        "reReview": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "not": {
+            "const": "all"
+          }
+        },
+        "revert": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "not": {
+            "const": "all"
+          }
+        },
+        "exempt": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "not": {
+              "const": "all"
+            }
+          }
+        }
+      },
+      "required": [
+        "ciRed",
+        "branchGone",
+        "deployFailed",
+        "reReview",
+        "revert",
+        "exempt"
+      ],
+      "additionalProperties": false
+    },
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "deployment",
+    "cloudflare",
+    "identity",
+    "members",
+    "auth",
+    "timing",
+    "clients",
+    "hooks",
+    "compatibility"
+  ],
+  "additionalProperties": false
+}

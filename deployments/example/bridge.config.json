@@ -1,0 +1,117 @@
+{
+  "$schema": "../../config/bridge.config.schema.json",
+  "schemaVersion": 1,
+  "deployment": {
+    "id": "example",
+    "displayName": "Example bridge",
+    "origin": "https://example.com"
+  },
+  "cloudflare": {
+    "workerName": "example-bridge",
+    "workersDev": false,
+    "previewUrls": false,
+    "observability": true
+  },
+  "identity": {
+    "hubClass": "Hub",
+    "hubBinding": "HUB",
+    "hubKey": "main"
+  },
+  "members": [
+    {
+      "name": "alice",
+      "kind": "person"
+    },
+    {
+      "name": "alice-cloud",
+      "kind": "device",
+      "person": "alice"
+    }
+  ],
+  "auth": {
+    "staticTokensSecret": {
+      "env": "CHIMERA_TOKENS"
+    },
+    "memberEmails": {
+      "env": "GOONBRIDGE_MEMBERS"
+    }
+  },
+  "timing": {
+    "claimSeconds": 900,
+    "claimLeaseSeconds": 300,
+    "bootSeconds": 300,
+    "onlineSeconds": 180,
+    "statusExpirySeconds": 28800,
+    "deploySeconds": 900
+  },
+  "github": {
+    "owner": "example",
+    "deployWorkflow": "Deploy",
+    "autoReview": false,
+    "webhookSecret": {
+      "env": "GOONBRIDGE_GITHUB_WEBHOOK_SECRET"
+    }
+  },
+  "clients": {
+    "connectorName": "chimera",
+    "launchdLabel": "com.example.chimera-responder",
+    "stateDirName": ".chimera"
+  },
+  "hooks": {
+    "approver": "alice",
+    "protectedBranches": [
+      "main"
+    ],
+    "enabled": [],
+    "externalSkills": [],
+    "branchPrefix": "agent/"
+  },
+  "compatibility": {
+    "envPrefix": "CHIMERA",
+    "headerPrefix": "Chimera",
+    "assetNames": {
+      "connector": "/chimera-mcp.mjs",
+      "responder": "/chimera-responder.mjs"
+    }
+  },
+  "access": {
+    "clientSecret": {
+      "env": "ACCESS_CLIENT_SECRET"
+    }
+  },
+  "cloud": {
+    "routinesSecret": {
+      "env": "GOONBRIDGE_ROUTINES"
+    },
+    "routines": {
+      "alice": {
+        "trigger": {
+          "env": "EXAMPLE_ALICE_TRIGGER"
+        },
+        "token": {
+          "env": "EXAMPLE_ALICE_TOKEN"
+        }
+      }
+    },
+    "namedRoutines": {
+      "review": {
+        "trigger": {
+          "env": "GOONBRIDGE_ROUTINE_REVIEW_TRIGGER"
+        },
+        "token": {
+          "env": "GOONBRIDGE_ROUTINE_REVIEW_TOKEN"
+        },
+        "allow": [
+          "alice"
+        ]
+      }
+    },
+    "configBundle": {
+      "repo": "alice/example-config",
+      "commit": "0000000000000000000000000000000000000000",
+      "pat": {
+        "env": "GITHUB_CONFIG_PAT"
+      }
+    }
+  }
+}
