@@ -31,8 +31,8 @@ test('every question block uses AskUserQuestion and names 2 to 4 options, each w
 test('the prescribed questions are all there', () => {
   const titles = blocks.map(b => b.split('\n')[0].toLowerCase()).join('\n');
   for (const topic of ['deployment', 'domain', 'display name', 'admin', 'access', 'people', 'confirm', 'master token']) assert.ok(titles.includes(topic), topic);
-  assert.match(skill, /No, token sign-in only \(simplest\)/);
-  assert.match(skill, /Yes, it is already in front of this domain/);
+  assert.match(skill, /- \*\*Email code via Cloudflare Access \(recommended; setup creates it for you\)\*\*: /);
+  assert.match(skill, /- \*\*I already have an Access app, use it \(paste its client id when asked\)\*\*: /);
   assert.match(skill, /https:\/\/dash\.cloudflare\.com\/profile\/api-tokens/);
   assert.match(skill, /API Tokens: Edit/);
   assert.match(skill, /pnpm secrets:mint -- --deployment/);
@@ -79,13 +79,26 @@ test('--token-steps prints 6 numbered steps with the dashboard URL', () => {
   assert.match(out, /^--- end ---$/m);
 });
 
-test('Access is written as a JSON boolean and re-asked word for word; the deployment id offers <name>-test first', () => {
-  const access = blocks.find(b => /cloudflare access/i.test(b.split('\n')[0]));
-  assert.match(access, /JSON boolean/);
-  assert.match(access, /"access": false/);
-  assert.match(access, /"access": true/);
-  assert.match(access, /[Nn]ever a string/);
+test('the sign-in question says what Access is, offers only what the code supports, and matches setup word for word', async () => {
+  const { SIGNIN_EXPLAINED, SIGNIN_OPTIONS } = await import('../bin/setup.mjs');
+  const access = blocks.find(b => /^Q6\. /.test(b));
+  assert.match(access, /question "How should people sign in\?"/);
+  assert.ok(access.includes(`"${SIGNIN_EXPLAINED}"`), 'the description line, word for word');
+  assert.equal(SIGNIN_EXPLAINED, "Cloudflare Access is Cloudflare's free login screen: it emails a one-time code and lets in only the emails on your list. No tokens for people; tokens are only for scripts and cloud sessions.");
+  const options = access.split('\n').filter(l => /^- \*\*.+\*\*: \S/.test(l)).map(l => l.match(/^- \*\*(.+?)\*\*:/)[1]);
+  assert.deepEqual(options, [SIGNIN_OPTIONS.provision, SIGNIN_OPTIONS.existing], 'two options: the bridge has no sign-in without Access');
+  assert.doesNotMatch(access, /Bridge-only email sign-in/);
+  assert.match(access, /"access": "provision"/);
+  assert.match(access, /"access": "existing"/);
   assert.match(access, /same two options, word for word/);
+  const clientId = blocks.find(b => /^Q6\.1 /.test(b));
+  assert.match(clientId, /accessClientId/);
+  assert.match(clientId, /secrets:fill -- --deployment <id> --only ACCESS_CLIENT_SECRET/);
+  assert.match(skill, /Step 3 of 8: creating the sign-in \(Cloudflare Access\)/);
+  assert.match(skill, /pnpm run members:sync -- --deployment <id>/);
+});
+
+test('the deployment id offers <name>-test first', () => {
   const id = blocks.find(b => /deployment id/i.test(b.split('\n')[0]));
   assert.match(id, /fields\.deployment\.choices/);
   assert.match(id, /<name>-test/);

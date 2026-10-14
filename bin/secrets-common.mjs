@@ -48,7 +48,7 @@ export function setKey(s, key, value) {
 // A real value: present and not a setup placeholder.
 export const hasValue = (s, key) => { const v = getKey(s, key); return v !== undefined && !isPlaceholder(v); };
 
-const ORDER = ['GOONBRIDGE_TOKENS', 'cloudflare.accountId', 'CLOUDFLARE_API_TOKEN', 'contractToken', 'GOONBRIDGE_GITHUB_WEBHOOK_SECRET',
+const ORDER = ['GOONBRIDGE_TOKENS', 'cloudflare.accountId', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCESS_TOKEN', 'contractToken', 'GOONBRIDGE_GITHUB_WEBHOOK_SECRET',
   'ACCESS_CLIENT_SECRET', 'GOONBRIDGE_MEMBERS', 'GOONBRIDGE_ROUTINES', 'GITHUB_CONFIG_PAT'];
 // The keys a deployment can hold, in a fixed order. needed: the schema requires it or this config references it.
 export async function secretFields(config) {

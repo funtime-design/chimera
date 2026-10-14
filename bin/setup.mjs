@@ -14,8 +14,14 @@
 // A new setup starts with step 0 (prerequisites) and stops on the first missing one. Then it detects what it can
 // (Cloudflare account, domains, git email as the first admin, defaults); --answers wins over detection, and on a
 // terminal it asks only for the rest. Without a terminal, missing answers exit 2 with a "needs-answer" list.
-// Exit 0: done (a manual Cloudflare Access step may remain, printed). Exit 2: waiting for a person (a prerequisite,
-// an answer, secrets to mint, or a confirmation with --yes). Exit 1: an error. Secret values (tokens, account ID, Access secret) are never printed: every line goes
+// Exit 0: done. Exit 2: waiting for a person (a prerequisite, an answer, secrets to mint, the one-time Cloudflare
+// Access step, or a confirmation with --yes).
+//
+// Sign-in: people sign in through Cloudflare Access (an email code); the bridge has no other way for a person to sign
+// in, so without Access only static tokens (scripts, cloud sessions) work. The "access" answer says how Access is made:
+// "provision" (setup creates the app, group and policy through bin/access-provision.mjs), "existing" (the person
+// already has an Access for SaaS app: its client id in "accessClientId", its secret entered with secrets:fill), or
+// false (no human sign-in; tokens only). Exit 1: an error. Secret values (tokens, account ID, Access secret) are never printed: every line goes
 // through redact(), and child command output is discarded (runCommand).
 import { execFileSync } from 'node:child_process';
 import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -28,6 +34,7 @@ import { checkAfterDeploy } from './contract-check.mjs';
 import { makeRedactor } from './secrets-common.mjs';
 import { mintSecrets } from './secrets-mint.mjs';
 import { buildResponder } from './build-responder.mjs';
+import { provisionAccess } from './access-provision.mjs';
 import { STATE_DIR, accessAnswer, capture, detect, formatPrereqs, howToGet, mergeAnswers, prereqs, prereqsOk, publicView } from './setup-detect.mjs';
 
 export { STATE_DIR };
@@ -39,6 +46,12 @@ const PLACEHOLDER = 'REPLACE_ME';
 export class Pause extends Error {}
 
 export const SHOW = '--- show this ---', SHOW_END = '--- end ---';
+// The sign-in question, word for word in the skill (Q6) and on a terminal.
+export const SIGNIN_EXPLAINED = 'Cloudflare Access is Cloudflare\'s free login screen: it emails a one-time code and lets in only the emails on your list. No tokens for people; tokens are only for scripts and cloud sessions.';
+export const SIGNIN_OPTIONS = {
+  provision: 'Email code via Cloudflare Access (recommended; setup creates it for you)',
+  existing: 'I already have an Access app, use it (paste its client id when asked)',
+};
 const shown = text => `${SHOW}\n${text}\n${SHOW_END}`;
 // The one place the master-token walkthrough lives; --token-steps prints it, the skill's "Show me the steps again" runs it.
 export const TOKEN_STEPS = [
@@ -72,10 +85,18 @@ export function checkAnswers(a) {
     seen.add(name);
     if (typeof p?.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) errors.push(`person ${PERSON.test(name) ? `"${name}"` : i + 1}: email must be an email address`);
   });
-  if (a.access !== undefined && typeof a.access !== 'boolean' && !(a.access && typeof a.access === 'object' && typeof a.access.enabled === 'boolean')) errors.push('access: true, false or { "enabled": true, "groupId": "<Access group id>" }');
+  if (a.access !== undefined && a.access !== false && !ACCESS_MODES.includes(accessOf(a))) errors.push('access: "provision" (setup creates the sign-in), "existing" (you have an Access app) or false (no human sign-in, tokens only)');
+  if (a.accessClientId !== undefined && (typeof a.accessClientId !== 'string' || !/^\S+$/.test(a.accessClientId))) errors.push('accessClientId: the client id of your Access for SaaS app (no spaces)');
   return errors;
 }
-const accessOf = a => a?.access === true ? { enabled: true } : a?.access && typeof a.access === 'object' && a.access.enabled ? { enabled: true, groupId: a.access.groupId } : { enabled: false };
+const ACCESS_MODES = ['provision', 'existing'];
+// The sign-in mode: "provision", "existing" or false. true and { enabled: true } are the old "already in front" answer.
+const accessOf = a => {
+  const v = a?.access;
+  if (v === true || (v && typeof v === 'object' && v.enabled === true)) return 'existing';
+  return ACCESS_MODES.includes(v) ? v : v === undefined || v === false || (v && typeof v === 'object' && v.enabled === false) ? false : v;
+};
+const modeOf = state => state.access === true ? 'existing' : state.access || false;
 
 // The committed config: the example's engine defaults, this deployment's identity and people, no optional integrations.
 export async function configFrom(a) {
@@ -87,7 +108,8 @@ export async function configFrom(a) {
   c.members = people.map(name => ({ name, kind: 'person' }));
   c.admins = a.admins.map(p => p.name);
   delete c.github; delete c.cloud; delete c.presentation;
-  if (accessOf(a).enabled) c.access = { clientSecret: { env: 'ACCESS_CLIENT_SECRET' } }; else delete c.access;
+  // "existing": the person's own app, its client id from the answers. "provision": access:provision writes the block.
+  if (accessOf(a) === 'existing') c.access = { ...(a.accessClientId ? { clientId: a.accessClientId } : {}), clientSecret: { env: 'ACCESS_CLIENT_SECRET' } }; else delete c.access;
   // Per-deployment client names, so one machine can later serve two bridges.
   c.clients = { connectorName: a.deployment, launchdLabel: `com.chimera.${a.deployment}-responder`, stateDirName: `.chimera-${a.deployment}` };
   c.hooks = { approvers: c.admins, protectedBranches: ['main'], enabled: [], externalSkills: [], branchPrefix: 'agent/' };
@@ -100,7 +122,7 @@ export function secretsFrom(a) {
     $schema: '../../config/secrets.schema.json',
     GOONBRIDGE_TOKENS: Object.fromEntries(people.map(p => [p.name, `${PLACEHOLDER}_random_24_plus_characters`])),
     GOONBRIDGE_MEMBERS: Object.fromEntries(people.map(p => [p.email.toLowerCase(), p.name])),
-    ...(accessOf(a).enabled ? { ACCESS_CLIENT_SECRET: `${PLACEHOLDER}_access_client_secret` } : {}),
+    ...(accessOf(a) === 'existing' ? { ACCESS_CLIENT_SECRET: `${PLACEHOLDER}_access_client_secret` } : {}),
     cloudflare: { accountId: a.accountId },
     CLOUDFLARE_API_TOKEN: `${PLACEHOLDER}_cloudflare_deploy_token`,
     contractToken: a.admins[0].name,
@@ -127,12 +149,12 @@ function secretValues(s) {
 const STEPS = [
   ['config', 'writing the bridge settings (bridge.config.json and deployment.lock.json)'],
   ['secrets', 'creating the secrets file (secrets.json, never committed) and its tokens'],
+  ['signin', 'creating the sign-in (Cloudflare Access)'],
   ['validate', 'checking the settings and the secrets fit together'],
   ['wrangler', 'generating the Worker config and the client files'],
   ['push', 'pushing secrets to Cloudflare (and to GitHub Actions when gh is set up)'],
   ['deploy', 'deploying the Worker to Cloudflare'],
   ['contract', 'checking the live bridge answers correctly'],
-  ['access', 'adding each person to the Cloudflare Access group'],
 ];
 
 export async function setup({
@@ -190,10 +212,10 @@ export async function setup({
     }
     const deployment = id ?? answers.deployment;
     const file = path.join(root, STATE_DIR, `${deployment}.json`);
-    state ??= { deployment, access: answers ? accessOf(answers).enabled : null, steps: {} };
+    state ??= { deployment, access: answers ? accessOf(answers) : null, steps: {} };
     if (answers) state.github = answers.githubActions !== false;
     if (opts.resume) say(shown(status(state, `Where setup stands for ${deployment}:`)));
-    if (answers) { state.access = accessOf(answers).enabled; if (accessOf(answers).groupId) state.accessGroup = String(accessOf(answers).groupId); }
+    if (answers) state.access = accessOf(answers);
     const save = async () => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, `${JSON.stringify(state, null, 2)}\n`); };
     const mark = async (step, status, note) => { state.steps[step] = { status, at: new Date().toISOString(), ...(note ? { note } : {}) }; await save(); };
     const confirm = async what => {
@@ -211,9 +233,10 @@ export async function setup({
     };
     let paused = null;
     for (const [step, title] of STEPS) {
-      if (step === 'access' && state.access === false) continue;
-      const total = state.access === false ? STEPS.length - 1 : STEPS.length;
-      const n = STEPS.findIndex(([s]) => s === step) + 1;
+      const active = activeSteps(state);
+      if (!active.some(([s]) => s === step)) continue;
+      const total = active.length;
+      const n = active.findIndex(([s]) => s === step) + 1;
       if (state.steps[step]?.status === 'done') { say(`Step ${n} of ${total}: ${title}: already done`); continue; }
       say(`Step ${n} of ${total}: ${title}`);
       try {
@@ -229,7 +252,7 @@ export async function setup({
             say(`  wrote deployments/${deployment}/bridge.config.json and deployment.lock.json (commit both)`);
           }
           const { config } = await loadDeployment({ root, deployment });
-          if (state.access === null) state.access = !!config.access;
+          if (state.access === null) state.access = config.access ? 'existing' : false;
           await mark(step, 'done');
         } else if (step === 'secrets') {
           const target = path.join(ddir, 'secrets.json');
@@ -242,7 +265,7 @@ export async function setup({
             if (env.CHIMERA_TOKEN_MINTER || isTTY) {
               say('  secrets:mint: generating member tokens and minting the deploy token ...');
               rl?.close(); rl = null; ask = prompt;
-              const code = await mintSecrets({ root, argv: ['--deployment', deployment], env, isTTY, ask: prompt, fetchImpl, offerPush: false,
+              const code = await mintSecrets({ root, argv: ['--deployment', deployment, ...(modeOf(state) ? ['--access-token'] : [])], env, isTTY, ask: prompt, fetchImpl, offerPush: false,
                 out: line => say(`  ${line}`), err: line => warn(`  ${line}`) });
               if (code !== 0) say('  secrets:mint did not finish; the placeholders below remain.');
             }
@@ -252,12 +275,20 @@ export async function setup({
           if (todo.length) {
             await mark(step, 'todo', `fill: ${todo.join(', ')}`);
             say(shown([`  Result: waiting for the tokens (${todo.join(', ')}).`,
-              `  Next: run pnpm secrets:mint -- --deployment ${deployment} in your own terminal. It asks for the one master token (typing stays hidden) and makes every other token.`,
+              `  Next: run pnpm secrets:mint -- --deployment ${deployment}${modeOf(state) ? ' --access-token' : ''} in your own terminal. It asks for the one master token (typing stays hidden) and makes every other token.`,
               '  The master token: https://dash.cloudflare.com/profile/api-tokens > Create Token > Create Custom Token > permission Account / API Tokens / Edit, nothing else, TTL 1 year.',
               `  Already hold the values? pnpm secrets:fill -- --deployment ${deployment} enters them instead.`,
               `  Then: pnpm run setup -- --deployment ${deployment} --resume`].join('\n')));
             paused = 'secrets'; break;
           }
+          await mark(step, 'done');
+        } else if (step === 'signin') {
+          // access:provision prints its own lines and show blocks; they are relayed as they are.
+          const code = await provisionAccess({ root, argv: ['--deployment', deployment, ...(modeOf(state) === 'existing' ? ['--existing'] : [])], env, fetchImpl,
+            out: line => say(line), err: line => warn(line) });
+          secrets = null;
+          if (code === 2) { await mark(step, 'todo', 'waiting for the step above'); say('  Result: waiting for the step above, then run setup again with --resume'); paused = step; break; }
+          if (code !== 0) throw new Error(`creating the sign-in failed (the reason is above); fix it, then pnpm run setup -- --deployment ${deployment} --resume`);
           await mark(step, 'done');
         } else if (step === 'validate') {
           const { config } = await loadDeployment({ root, deployment });
@@ -293,25 +324,8 @@ export async function setup({
           await checkAfterDeploy({ origin: config.deployment.origin, token: secrets.GOONBRIDGE_TOKENS[secrets.contractToken], expectedEngine: pkg.version, fetchImpl,
             redeploy: () => deploy(run, root, `.generated/wrangler.${deployment}.jsonc`, secrets, env, deployment), log: line => say(`  ${line}`) });
           await mark(step, 'done');
-        } else if (step === 'access') {
-          secrets ??= await loadSecrets();
-          const emails = Object.keys(secrets.GOONBRIDGE_MEMBERS ?? {});
-          const group = state.accessGroup;
-          const token = env.CLOUDFLARE_ACCESS_TOKEN;
-          if (token) hide(token);
-          if (token && group && emails.length && await confirm(`add ${emails.length} email(s) to Access group ${group} through the Cloudflare API`)) {
-            await addToAccessGroup(fetchImpl, secrets.cloudflare.accountId, group, token, emails);
-            say(`  added ${emails.length} email(s) to the Access group`);
-            await mark(step, 'done');
-          } else {
-            say('  Cloudflare Access guards this bridge: each person must also be in its Access group (Zero Trust > Access > Access groups):');
-            for (const email of emails) say(`    - add ${email} to the Access group`);
-            say('  With a Cloudflare API token that can edit Access groups in CLOUDFLARE_ACCESS_TOKEN and access.groupId in the answers, setup does it for you.');
-            await mark(step, 'manual', 'add each email to the Access group');
-          }
         }
         if (state.steps[step]?.status === 'done') say('  Result: done');
-        else if (state.steps[step]?.status === 'manual') say('  Result: one manual step left (above)');
       } catch (error) {
         if (error instanceof Pause) { await mark(step, 'todo', 'waiting for confirmation'); say('  Result: waiting for your yes'); throw error; }
         say('  Result: failed (the reason follows)');
@@ -331,9 +345,10 @@ export async function setup({
   }
 }
 
+// The sign-in step runs only when people sign in through Access.
+const activeSteps = state => STEPS.filter(([s]) => s !== 'signin' || modeOf(state));
 function status(state, heading = `Setup status for ${state.deployment}:`) {
-  const lines = STEPS.filter(([s]) => s !== 'access' || state.access !== false)
-    .map(([s, title]) => `  [${state.steps[s]?.status ?? 'todo'}] ${title}`);
+  const lines = activeSteps(state).map(([s, title]) => `  [${state.steps[s]?.status ?? 'todo'}] ${title}`);
   return `${heading}\n${lines.join('\n')}`;
 }
 
@@ -342,24 +357,6 @@ async function deploy(run, root, config, secrets, env, deployment) {
     await run('pnpm', ['exec', 'wrangler', 'deploy', '-c', config], { cwd: root,
       env: { ...env, CHIMERA_DEPLOYMENT: deployment, CLOUDFLARE_ACCOUNT_ID: secrets.cloudflare.accountId, CLOUDFLARE_API_TOKEN: secrets.CLOUDFLARE_API_TOKEN } });
   } catch { throw new Error('wrangler deploy failed (output not shown, it may hold secrets); run it by hand to see why'); }
-}
-
-// Cloudflare API: read the group, append the missing emails to its include rules, write it back. Errors carry no body.
-export async function addToAccessGroup(fetchImpl, accountId, groupId, token, emails) {
-  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/access/groups/${encodeURIComponent(groupId)}`;
-  const call = async (method, body) => {
-    let res;
-    try { res = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), redirect: 'error' }); }
-    catch { throw new Error('Cloudflare Access API request failed'); }
-    let data = null;
-    try { data = await res.json(); } catch {}
-    if (!res.ok || !data?.success) throw new Error(`Cloudflare Access API refused the ${method} (${res.status}); add the emails by hand`);
-    return data.result;
-  };
-  const group = await call('GET');
-  const have = new Set((group.include ?? []).map(r => r.email?.email?.toLowerCase()).filter(Boolean));
-  const include = [...(group.include ?? []), ...emails.filter(e => !have.has(e.toLowerCase())).map(email => ({ email: { email } }))];
-  await call('PUT', { name: group.name, include, ...(group.exclude ? { exclude: group.exclude } : {}), ...(group.require ? { require: group.require } : {}) });
 }
 
 // On a terminal: ask, one thing at a time, only what the answers file did not give, offering what detection found.
@@ -402,8 +399,13 @@ async function questionnaire(question, say, report, given) {
   a.admins ??= await people('Admins (they open the status and settings pages)', 1, f.admins.source === 'needs-answer' ? null : f.admins.value);
   a.members ??= await people('Other people (blank for none)', 0);
   if (a.access === undefined) {
-    say('Cloudflare Access is a sign-in screen Cloudflare can put in front of the bridge. Without it, people sign in with a token.');
-    a.access = /^y(es)?$/i.test(await question('Is Cloudflare Access already in front of this domain? [y/N] '));
+    say(SIGNIN_EXPLAINED);
+    say('How should people sign in?');
+    say(`  1) ${SIGNIN_OPTIONS.provision}`);
+    say(`  2) ${SIGNIN_OPTIONS.existing}`);
+    const v = await askUntil('Pick a number', v => v === '1' || v === '2', '1 or 2', '1');
+    a.access = v === '1' ? 'provision' : 'existing';
+    if (a.access === 'existing') a.accessClientId ??= await askUntil('  Your Access app\'s client id (Zero Trust > Access controls > Applications > your app > Configure)', v => /^\S+$/.test(v), 'the client id, no spaces');
   }
   return a;
 }

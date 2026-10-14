@@ -19,6 +19,8 @@
     "secrets:push": "node bin/secrets-push.mjs",
     "secrets:mint": "node bin/secrets-mint.mjs",
     "secrets:fill": "node bin/secrets-fill.mjs",
+    "access:provision": "node bin/access-provision.mjs",
+    "members:sync": "node bin/access-provision.mjs --sync",
     "gen:wrangler": "node bin/gen-wrangler.mjs",
     "validate:deployment": "node bin/validate-deployment.mjs",
     "contract:check": "node bin/contract-check.mjs",

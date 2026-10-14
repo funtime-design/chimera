@@ -12,6 +12,10 @@ export async function pushSecrets({ root = projectRoot, deployment, dryRun = fal
     ...(github ? [{ name: 'BRIDGE_CONTRACT_TOKEN', command: 'gh', args: ['secret', 'set', 'BRIDGE_CONTRACT_TOKEN'], value: secrets.GOONBRIDGE_TOKENS[secrets.contractToken], target: 'GitHub Actions' },
     { name: 'CLOUDFLARE_ACCOUNT_ID', command: 'gh', args: ['secret', 'set', 'CLOUDFLARE_ACCOUNT_ID'], value: secrets.cloudflare.accountId, target: 'GitHub Actions' },
     { name: 'CLOUDFLARE_API_TOKEN', command: 'gh', args: ['secret', 'set', 'CLOUDFLARE_API_TOKEN'], value: secrets.CLOUDFLARE_API_TOKEN, target: 'GitHub Actions' }] : []),
+    // With the Access token, the deploy workflow keeps the Access group in step with the members (members:sync).
+    ...(github && secrets.CLOUDFLARE_ACCESS_TOKEN && secrets.GOONBRIDGE_MEMBERS ? [
+      { name: 'CLOUDFLARE_ACCESS_TOKEN', command: 'gh', args: ['secret', 'set', 'CLOUDFLARE_ACCESS_TOKEN'], value: secrets.CLOUDFLARE_ACCESS_TOKEN, target: 'GitHub Actions' },
+      { name: 'GOONBRIDGE_MEMBERS', command: 'gh', args: ['secret', 'set', 'GOONBRIDGE_MEMBERS'], value: JSON.stringify(secrets.GOONBRIDGE_MEMBERS), target: 'GitHub Actions' }] : []),
   ];
   for (const step of plan) {
     log(`${dryRun ? 'Would set' : 'Setting'} ${step.name} (${step.target})`);

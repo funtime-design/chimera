@@ -55,6 +55,7 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       BRIDGE_CONTRACT_TOKEN: ${{ secrets.BRIDGE_CONTRACT_TOKEN }}
+      HAS_ACCESS_TOKEN: ${{ secrets.CLOUDFLARE_ACCESS_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -84,6 +85,14 @@ jobs:
       - run: pnpm exec wrangler deploy -c ".generated/wrangler.$DEPLOYMENT.jsonc"
       - name: Check contracts and recover a stale Hub once
         run: pnpm contract:check -- --deployment "$DEPLOYMENT" --redeploy-on-stale
+      # Keeps the Cloudflare Access group's email list equal to the members (pnpm secrets:push sets both secrets when
+      # secrets.json holds CLOUDFLARE_ACCESS_TOKEN). Skipped when that secret is absent.
+      - name: Sync the Access members group
+        if: env.HAS_ACCESS_TOKEN == 'true'
+        env:
+          CLOUDFLARE_ACCESS_TOKEN: ${{ secrets.CLOUDFLARE_ACCESS_TOKEN }}
+          GOONBRIDGE_MEMBERS: ${{ secrets.GOONBRIDGE_MEMBERS }}
+        run: pnpm run members:sync -- --deployment "$DEPLOYMENT"
       - name: Staging smoke (status, send, task create, get and drop)
         if: env.DEPLOYMENT == 'staging'
         run: pnpm staging:smoke -- --deployment "$DEPLOYMENT"
