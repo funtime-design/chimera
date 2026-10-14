@@ -9,6 +9,8 @@ You are walking a person, possibly a stranger to Cloudflare, through setup. `bin
 
 Use `pnpm run setup`, never `pnpm setup` (that is pnpm's own command and edits the shell profile).
 
+The person may use `pnpm run setup -- --web` instead: the same steps and the same questions, word for word, on a local page in their browser, sharing this flow's state file. If they pick it, give them that one command to run in their own terminal and let the page do the rest.
+
 ## What the user must see
 
 The person sees only what you write, never the tool output. So you relay script output that is marked for the user verbatim, never summarised.
@@ -17,6 +19,7 @@ The person sees only what you write, never the tool output. So you relay script 
 - The prerequisites checklist is always shown in full, every tick and cross, even when everything passes. After it, one line: "All set" or the first fix.
 - After each setup step, relay its "Step N of M: ..." line and its "Result: ..." line verbatim, one step per line. Every step, including "already done".
 - On a pause (exit 2), the show block holds the "waiting for" line and the exact command or question. Print it verbatim, then ask.
+- Every step that sends the person to another site (signing up for Cloudflare, `npx wrangler login`, the master token, turning on Cloudflare Access) has an illustrated guide in docs/guides/; setup prints its numbered steps with "Screenshot: docs/images/..." lines inside the show block. Relay them verbatim, screenshot paths included, so the person can open the pictures.
 - An option that shows or explains something (such as "Show me the steps again") prints that text as its own message first, then you ask the same question again.
 
 ## Do not
@@ -188,7 +191,7 @@ Setup pauses at step 2 (exit 2) until the tokens exist. One master token makes a
 
 ### Q10. Master token
 
-AskUserQuestion, header "Token", question "Create the one master token now? Go to https://dash.cloudflare.com/profile/api-tokens > Create Token > Create Custom Token, add the permission Account: API Tokens: Edit (no other permissions), TTL 1 year, then Continue to summary > Create Token. Keep it in your password manager."
+First run `pnpm run setup -- --token-steps` and print its show block verbatim as its own message: the numbered steps and the screenshot paths come from docs/guides/master-token.md, the one copy of them. Then AskUserQuestion, header "Token", question "Create the one master token now? Follow the steps above, then keep the token in your password manager."
 Options:
 - **I have it, run mint**: I'll paste it into the masked prompt (typing stays hidden).
 - **Show me the steps again**: prints the 6 steps, numbered, as their own message.

@@ -7,6 +7,7 @@
 //   pnpm run setup -- --prereqs     step 0 only: the checklist of what this machine needs
 //   pnpm run setup -- --detect      what setup can find out by itself, as JSON (bin/setup-detect.mjs)
 //   pnpm run setup -- --token-steps the 6 numbered steps to create the master token in the Cloudflare dashboard
+//   pnpm run setup -- --web [--deployment <id>]  the same steps and questions on a local page in the browser (bin/setup-web.mjs)
 //
 // Text the person must see word for word sits between a "--- show this ---" line and a "--- end ---" line; the
 // chimera-setup skill relays those blocks verbatim (prerequisites, pauses, needs-answer lists, status checklists).
@@ -23,139 +24,18 @@
 // already has an Access for SaaS app: its client id in "accessClientId", its secret entered with secrets:fill), or
 // false (no human sign-in; tokens only). Exit 1: an error. Secret values (tokens, account ID, Access secret) are never printed: every line goes
 // through redact(), and child command output is discarded (runCommand).
-import { execFileSync } from 'node:child_process';
-import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+//
+// The steps themselves live in bin/setup-engine.mjs; this file is the terminal around them.
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
-import { engineTemplate, identityOf, isMain, loadDeployment, projectRoot, readJson, requirePrivateSecrets, runCommand, validation } from './deployment.mjs';
-import { writeWrangler } from './gen-wrangler.mjs';
-import { pushSecrets } from './secrets-push.mjs';
-import { checkAfterDeploy } from './contract-check.mjs';
+import { isMain, projectRoot, runCommand } from './deployment.mjs';
 import { makeRedactor } from './secrets-common.mjs';
-import { mintSecrets } from './secrets-mint.mjs';
-import { buildResponder } from './build-responder.mjs';
-import { provisionAccess } from './access-provision.mjs';
-import { STATE_DIR, accessAnswer, capture, detect, formatPrereqs, howToGet, mergeAnswers, prereqs, prereqsOk, publicView } from './setup-detect.mjs';
+import { guideLines, guideSource, parseGuide } from './guides.mjs';
+import { accessAnswer, capture, detect, formatPrereqs, howToGet, mergeAnswers, prereqs, prereqsOk, publicView } from './setup-detect.mjs';
+import { ID, PERSON, Pause, SIGNIN_EXPLAINED, SIGNIN_OPTIONS, accessOf, checkAnswers, exists, onlyState, readState, runSteps, shown, stateFileOf, status } from './setup-engine.mjs';
 
-export { STATE_DIR };
-const ID = /^[a-z0-9][a-z0-9_-]*$/;
-// Person names: no dash (a dash separates a person from their device), never "all".
-const PERSON = /^[a-z0-9][a-z0-9_]*$/;
-const PLACEHOLDER = 'REPLACE_ME';
-
-export class Pause extends Error {}
-
-export const SHOW = '--- show this ---', SHOW_END = '--- end ---';
-// The sign-in question, word for word in the skill (Q6) and on a terminal.
-export const SIGNIN_EXPLAINED = 'Cloudflare Access is Cloudflare\'s free login screen: it emails a one-time code and lets in only the emails on your list. No tokens for people; tokens are only for scripts and cloud sessions.';
-export const SIGNIN_OPTIONS = {
-  provision: 'Email code via Cloudflare Access (recommended; setup creates it for you)',
-  existing: 'I already have an Access app, use it (paste its client id when asked)',
-};
-const shown = text => `${SHOW}\n${text}\n${SHOW_END}`;
-// The one place the master-token walkthrough lives; --token-steps prints it, the skill's "Show me the steps again" runs it.
-export const TOKEN_STEPS = [
-  '1. Open https://dash.cloudflare.com/profile/api-tokens (Cloudflare dashboard > My Profile > API Tokens).',
-  '2. Click Create Token, then Create Custom Token > Get started.',
-  '3. Give it a name, such as "chimera master", and add one permission: Account / API Tokens / Edit. Nothing else.',
-  '4. Under TTL, set the end date one year from today.',
-  '5. Click Continue to summary, then Create Token.',
-  '6. Copy the token into your password manager now (Cloudflare shows it once), then run pnpm secrets:mint -- --deployment <id> in your own terminal and paste it at the hidden prompt.',
-];
-
-// What a person must answer; everything else is derived. Messages never echo an email or the account ID.
-export function checkAnswers(a) {
-  const errors = [];
-  if (!a || typeof a !== 'object') return ['answers must be a JSON object'];
-  if (!ID.test(a.deployment ?? '') || a.deployment === 'all' || a.deployment === 'example') errors.push('deployment: lowercase letters, digits, dash or underscore; not "all" or "example"');
-  if (typeof a.displayName !== 'string' || !a.displayName.trim()) errors.push('displayName: required');
-  let origin;
-  try { origin = new URL(a.origin); } catch {}
-  if (!origin || origin.protocol !== 'https:' || origin.origin !== a.origin) errors.push('origin: an HTTPS origin such as https://bridge.example.com (no path)');
-  if (!/^[a-fA-F0-9]{32}$/.test(a.accountId ?? '')) errors.push('accountId: the 32-character Cloudflare account ID');
-  if (!ID.test(a.workerName ?? '') || a.workerName === 'all') errors.push('workerName: lowercase letters, digits, dash or underscore');
-  const people = [...(Array.isArray(a.admins) ? a.admins : []), ...(Array.isArray(a.members) ? a.members : [])];
-  if (!Array.isArray(a.admins) || a.admins.length === 0) errors.push('admins: at least one person');
-  if (a.members !== undefined && !Array.isArray(a.members)) errors.push('members: a list of people');
-  const seen = new Set();
-  people.forEach((p, i) => {
-    const name = typeof p?.name === 'string' ? p.name : '';
-    if (!PERSON.test(name) || name === 'all') errors.push(`person ${i + 1}: name must be lowercase letters, digits or underscore, with no dash${name.includes('-') ? ` ("${name}" has a dash)` : ''}`);
-    else if (seen.has(name)) errors.push(`person "${name}" is used twice; every person name is used once`);
-    seen.add(name);
-    if (typeof p?.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) errors.push(`person ${PERSON.test(name) ? `"${name}"` : i + 1}: email must be an email address`);
-  });
-  if (a.access !== undefined && a.access !== false && !ACCESS_MODES.includes(accessOf(a))) errors.push('access: "provision" (setup creates the sign-in), "existing" (you have an Access app) or false (no human sign-in, tokens only)');
-  if (a.accessClientId !== undefined && (typeof a.accessClientId !== 'string' || !/^\S+$/.test(a.accessClientId))) errors.push('accessClientId: the client id of your Access for SaaS app (no spaces)');
-  return errors;
-}
-const ACCESS_MODES = ['provision', 'existing'];
-// The sign-in mode: "provision", "existing" or false. true and { enabled: true } are the old "already in front" answer.
-const accessOf = a => {
-  const v = a?.access;
-  if (v === true || (v && typeof v === 'object' && v.enabled === true)) return 'existing';
-  return ACCESS_MODES.includes(v) ? v : v === undefined || v === false || (v && typeof v === 'object' && v.enabled === false) ? false : v;
-};
-const modeOf = state => state.access === true ? 'existing' : state.access || false;
-
-// The committed config: the example's engine defaults, this deployment's identity and people, no optional integrations.
-export async function configFrom(a) {
-  const example = await readJson(path.join(projectRoot, 'deployments/example/bridge.config.json'));
-  const people = [...a.admins, ...(a.members ?? [])].map(p => p.name);
-  const c = structuredClone(example);
-  c.deployment = { id: a.deployment, displayName: a.displayName.trim(), origin: a.origin };
-  c.cloudflare = { workerName: a.workerName, workersDev: new URL(a.origin).host.endsWith('.workers.dev'), previewUrls: false, observability: true };
-  c.members = people.map(name => ({ name, kind: 'person' }));
-  c.admins = a.admins.map(p => p.name);
-  delete c.github; delete c.cloud; delete c.presentation;
-  // "existing": the person's own app, its client id from the answers. "provision": access:provision writes the block.
-  if (accessOf(a) === 'existing') c.access = { ...(a.accessClientId ? { clientId: a.accessClientId } : {}), clientSecret: { env: 'ACCESS_CLIENT_SECRET' } }; else delete c.access;
-  // Per-deployment client names, so one machine can later serve two bridges.
-  c.clients = { connectorName: a.deployment, launchdLabel: `com.chimera.${a.deployment}-responder`, stateDirName: `.chimera-${a.deployment}` };
-  c.hooks = { approvers: c.admins, protectedBranches: ['main'], enabled: [], externalSkills: [], branchPrefix: 'agent/' };
-  return c;
-}
-
-export function secretsFrom(a) {
-  const people = [...a.admins, ...(a.members ?? [])];
-  return {
-    $schema: '../../config/secrets.schema.json',
-    GOONBRIDGE_TOKENS: Object.fromEntries(people.map(p => [p.name, `${PLACEHOLDER}_random_24_plus_characters`])),
-    GOONBRIDGE_MEMBERS: Object.fromEntries(people.map(p => [p.email.toLowerCase(), p.name])),
-    ...(accessOf(a) === 'existing' ? { ACCESS_CLIENT_SECRET: `${PLACEHOLDER}_access_client_secret` } : {}),
-    cloudflare: { accountId: a.accountId },
-    CLOUDFLARE_API_TOKEN: `${PLACEHOLDER}_cloudflare_deploy_token`,
-    contractToken: a.admins[0].name,
-  };
-}
-
-// Key paths still holding a placeholder (names only, never values).
-export function unfilled(value, at = '') {
-  if (typeof value === 'string') return value.includes(PLACEHOLDER) || value.startsWith('FAKE_') ? [at] : [];
-  if (!value || typeof value !== 'object') return [];
-  return Object.entries(value).flatMap(([k, v]) => k === '$schema' ? [] : unfilled(v, at ? `${at}.${k}` : k));
-}
-// Every string in the secrets file except member names and the email map: what redact() hides.
-function secretValues(s) {
-  const out = [];
-  const walk = (v, key) => {
-    if (typeof v === 'string') { if (key !== '$schema' && key !== 'contractToken' && v.length >= 4) out.push(v); }
-    else if (v && typeof v === 'object') for (const [k, child] of Object.entries(v)) if (k !== 'GOONBRIDGE_MEMBERS') walk(child, k);
-  };
-  walk(s);
-  return out;
-}
-
-const STEPS = [
-  ['config', 'writing the bridge settings (bridge.config.json and deployment.lock.json)'],
-  ['secrets', 'creating the secrets file (secrets.json, never committed) and its tokens'],
-  ['signin', 'creating the sign-in (Cloudflare Access)'],
-  ['validate', 'checking the settings and the secrets fit together'],
-  ['wrangler', 'generating the Worker config and the client files'],
-  ['push', 'pushing secrets to Cloudflare (and to GitHub Actions when gh is set up)'],
-  ['deploy', 'deploying the Worker to Cloudflare'],
-  ['contract', 'checking the live bridge answers correctly'],
-];
+export { STATE_DIR, Pause, SHOW, SHOW_END, SIGNIN_EXPLAINED, SIGNIN_OPTIONS, TOKEN_STEPS, checkAnswers, configFrom, secretsFrom, unfilled } from './setup-engine.mjs';
 
 export async function setup({
   root = projectRoot, argv = [], env = process.env, isTTY = !!(process.stdin.isTTY && process.stdout.isTTY),
@@ -171,8 +51,13 @@ export async function setup({
   };
   try {
     const opts = parseArgs(argv);
+    if (opts.web) {
+      const { startSetupWeb } = await import('./setup-web.mjs');
+      await startSetupWeb({ root, deployment: opts.deployment, env, run, fetchImpl, detector, out });
+      return new Promise(() => {}); // serves until Ctrl-C
+    }
     if (opts.detect) { out(JSON.stringify(publicView(await detector({ answers: {} })), null, 2)); return 0; }
-    if (opts.tokenSteps) { say(shown(['Create the master token:', ...TOKEN_STEPS].join('\n'))); return 0; }
+    if (opts.tokenSteps) { say(shown([`${parseGuide(guideSource('master-token')).title} (docs/guides/master-token.md):`, ...guideLines('master-token')].join('\n'))); return 0; }
     if (opts.prereqs) { const list = prereqs(await detector({ answers: {} })); say(shown(formatPrereqs(list))); return prereqsOk(list) ? 0 : 2; }
     let answers = null;
     if (opts.answers) {
@@ -182,11 +67,9 @@ export async function setup({
     if (answers) answers.access = accessAnswer(answers.access);
     const id = opts.deployment ?? answers?.deployment ?? (opts.resume ? await onlyState(root) : null);
     if (opts.deployment && answers?.deployment && answers.deployment !== opts.deployment) throw new Error('--deployment and the answers file name different deployments');
-    const stateFile = id && ID.test(id) ? path.join(root, STATE_DIR, `${id}.json`) : null;
-    let state = stateFile ? await readState(stateFile) : null;
+    let state = id && ID.test(id) ? await readState(stateFileOf(root, id)) : null;
     if (opts.resume && !state) throw new Error(`nothing to resume${id ? ` for "${id}"` : ''}: run setup without --resume first`);
-    const dir = id && ID.test(id) ? path.join(root, 'deployments', id) : null;
-    const configured = dir && await exists(path.join(dir, 'bridge.config.json'));
+    const configured = id && ID.test(id) && await exists(path.join(root, 'deployments', id, 'bridge.config.json'));
     if (!state?.steps?.config && !configured) {
       // Step 0, then detection: --answers wins, detection fills the rest, a terminal asks for what is left.
       const given = { ...(answers ?? {}), ...(id ? { deployment: id } : {}) };
@@ -211,131 +94,12 @@ export async function setup({
       if (problems.length) throw new Error(`answers need fixing:\n  - ${problems.join('\n  - ')}`);
     }
     const deployment = id ?? answers.deployment;
-    const file = path.join(root, STATE_DIR, `${deployment}.json`);
     state ??= { deployment, access: answers ? accessOf(answers) : null, steps: {} };
     if (answers) state.github = answers.githubActions !== false;
     if (opts.resume) say(shown(status(state, `Where setup stands for ${deployment}:`)));
     if (answers) state.access = accessOf(answers);
-    const save = async () => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, `${JSON.stringify(state, null, 2)}\n`); };
-    const mark = async (step, status, note) => { state.steps[step] = { status, at: new Date().toISOString(), ...(note ? { note } : {}) }; await save(); };
-    const confirm = async what => {
-      if (opts.yes) return true;
-      if (!isTTY) throw new Pause(`waiting for confirmation: re-run with --resume --yes to ${what}`);
-      return /^y(es)?$/i.test(await question(`${what}? [y/N] `));
-    };
-    const ddir = path.join(root, 'deployments', deployment);
-    let secrets = null;
-    const loadSecrets = async () => {
-      const f = await requirePrivateSecrets(root, deployment);
-      const s = await readJson(f);
-      for (const v of secretValues(s)) hide(v);
-      return s;
-    };
-    let paused = null;
-    for (const [step, title] of STEPS) {
-      const active = activeSteps(state);
-      if (!active.some(([s]) => s === step)) continue;
-      const total = active.length;
-      const n = active.findIndex(([s]) => s === step) + 1;
-      if (state.steps[step]?.status === 'done') { say(`Step ${n} of ${total}: ${title}: already done`); continue; }
-      say(`Step ${n} of ${total}: ${title}`);
-      try {
-        if (step === 'config') {
-          if (await exists(path.join(ddir, 'bridge.config.json'))) say('  deployments/' + deployment + '/bridge.config.json exists; keeping it');
-          else {
-            if (!answers) throw new Error('no answers to write the config from: pass --answers');
-            const config = await configFrom(answers);
-            const lock = identityOf(config, await engineTemplate());
-            await mkdir(ddir, { recursive: true });
-            await writeFile(path.join(ddir, 'bridge.config.json'), `${JSON.stringify({ $schema: '../../config/bridge.config.schema.json', ...config }, null, 2)}\n`);
-            await writeFile(path.join(ddir, 'deployment.lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
-            say(`  wrote deployments/${deployment}/bridge.config.json and deployment.lock.json (commit both)`);
-          }
-          const { config } = await loadDeployment({ root, deployment });
-          if (state.access === null) state.access = config.access ? 'existing' : false;
-          await mark(step, 'done');
-        } else if (step === 'secrets') {
-          const target = path.join(ddir, 'secrets.json');
-          if (!await exists(target)) {
-            if (!ignored(root, `deployments/${deployment}/secrets.json`)) throw new Error('secrets.json must be gitignored before it is written (deployments/*/secrets.json)');
-            if (!answers) throw new Error('secrets.json is missing and there are no answers to create it from: pass --answers');
-            await writeFile(target, `${JSON.stringify(secretsFrom(answers), null, 2)}\n`, { mode: 0o600 });
-            say(`  created deployments/${deployment}/secrets.json (ignored by git; never commit it)`);
-            // A new file holds placeholders: secrets:mint fills them when a minter token is at hand (env or terminal).
-            if (env.CHIMERA_TOKEN_MINTER || isTTY) {
-              say('  secrets:mint: generating member tokens and minting the deploy token ...');
-              rl?.close(); rl = null; ask = prompt;
-              const code = await mintSecrets({ root, argv: ['--deployment', deployment, ...(modeOf(state) ? ['--access-token'] : [])], env, isTTY, ask: prompt, fetchImpl, offerPush: false,
-                out: line => say(`  ${line}`), err: line => warn(`  ${line}`) });
-              if (code !== 0) say('  secrets:mint did not finish; the placeholders below remain.');
-            }
-          }
-          secrets = await loadSecrets();
-          const todo = unfilled(secrets);
-          if (todo.length) {
-            await mark(step, 'todo', `fill: ${todo.join(', ')}`);
-            say(shown([`  Result: waiting for the tokens (${todo.join(', ')}).`,
-              `  Next: run pnpm secrets:mint -- --deployment ${deployment}${modeOf(state) ? ' --access-token' : ''} in your own terminal. It asks for the one master token (typing stays hidden) and makes every other token.`,
-              '  The master token: https://dash.cloudflare.com/profile/api-tokens > Create Token > Create Custom Token > permission Account / API Tokens / Edit, nothing else, TTL 1 year.',
-              `  Already hold the values? pnpm secrets:fill -- --deployment ${deployment} enters them instead.`,
-              `  Then: pnpm run setup -- --deployment ${deployment} --resume`].join('\n')));
-            paused = 'secrets'; break;
-          }
-          await mark(step, 'done');
-        } else if (step === 'signin') {
-          // access:provision prints its own lines and show blocks; they are relayed as they are.
-          const code = await provisionAccess({ root, argv: ['--deployment', deployment, ...(modeOf(state) === 'existing' ? ['--existing'] : [])], env, fetchImpl,
-            out: line => say(line), err: line => warn(line) });
-          secrets = null;
-          if (code === 2) { await mark(step, 'todo', 'waiting for the step above'); say('  Result: waiting for the step above, then run setup again with --resume'); paused = step; break; }
-          if (code !== 0) throw new Error(`creating the sign-in failed (the reason is above); fix it, then pnpm run setup -- --deployment ${deployment} --resume`);
-          await mark(step, 'done');
-        } else if (step === 'validate') {
-          const { config } = await loadDeployment({ root, deployment });
-          secrets ??= await loadSecrets();
-          (await validation()).validateSecrets(secrets, config);
-          await mark(step, 'done');
-        } else if (step === 'wrangler') {
-          secrets ??= await loadSecrets();
-          await writeWrangler({ root, deployment, accountId: secrets.cloudflare.accountId });
-          const { config } = await loadDeployment({ root, deployment });
-          await mkdir(path.join(root, 'bin'), { recursive: true });
-          await buildResponder({ config, root });
-          if (!await exists(path.join(root, '.generated', `wrangler.${deployment}.jsonc`))) throw new Error('generated Wrangler config missing');
-          await mark(step, 'done');
-        } else if (step === 'push') {
-          const github = state.github !== false;
-          if (!github) say('  gh is not set up, so the GitHub Actions secrets are skipped');
-          await pushSecrets({ root, deployment, dryRun: true, github, run, log: line => say(`  ${line}`) });
-          if (!await confirm('push these secrets now')) { await mark(step, 'todo', 'not confirmed'); paused = step; break; }
-          await pushSecrets({ root, deployment, github, run, log: line => say(`  ${line}`) });
-          await mark(step, 'done');
-        } else if (step === 'deploy') {
-          secrets ??= await loadSecrets();
-          const config = `.generated/wrangler.${deployment}.jsonc`;
-          say(`  will run: pnpm exec wrangler deploy -c ${config}`);
-          if (!await confirm('deploy now')) { await mark(step, 'todo', 'not confirmed'); paused = step; break; }
-          await deploy(run, root, config, secrets, env, deployment);
-          await mark(step, 'done');
-        } else if (step === 'contract') {
-          secrets ??= await loadSecrets();
-          const { config } = await loadDeployment({ root, deployment });
-          const pkg = await readJson(path.join(projectRoot, 'package.json'));
-          await checkAfterDeploy({ origin: config.deployment.origin, token: secrets.GOONBRIDGE_TOKENS[secrets.contractToken], expectedEngine: pkg.version, fetchImpl,
-            redeploy: () => deploy(run, root, `.generated/wrangler.${deployment}.jsonc`, secrets, env, deployment), log: line => say(`  ${line}`) });
-          await mark(step, 'done');
-        }
-        if (state.steps[step]?.status === 'done') say('  Result: done');
-      } catch (error) {
-        if (error instanceof Pause) { await mark(step, 'todo', 'waiting for confirmation'); say('  Result: waiting for your yes'); throw error; }
-        say('  Result: failed (the reason follows)');
-        await mark(step, 'todo', 'failed; see the message and re-run with --resume');
-        throw error;
-      }
-    }
-    say(shown(status(state)));
-    if (paused) return 2;
-    return 0;
+    return await runSteps({ root, state, answers, yes: opts.yes, isTTY, question, prompt, releaseTerminal: () => { rl?.close(); rl = null; ask = prompt; },
+      run, fetchImpl, env, say, warn, hide });
   } catch (error) {
     if (error instanceof Pause) { say(shown(error.message)); return 2; }
     warn(`setup: ${error.message}`);
@@ -343,20 +107,6 @@ export async function setup({
   } finally {
     rl?.close();
   }
-}
-
-// The sign-in step runs only when people sign in through Access.
-const activeSteps = state => STEPS.filter(([s]) => s !== 'signin' || modeOf(state));
-function status(state, heading = `Setup status for ${state.deployment}:`) {
-  const lines = activeSteps(state).map(([s, title]) => `  [${state.steps[s]?.status ?? 'todo'}] ${title}`);
-  return `${heading}\n${lines.join('\n')}`;
-}
-
-async function deploy(run, root, config, secrets, env, deployment) {
-  try {
-    await run('pnpm', ['exec', 'wrangler', 'deploy', '-c', config], { cwd: root,
-      env: { ...env, CHIMERA_DEPLOYMENT: deployment, CLOUDFLARE_ACCOUNT_ID: secrets.cloudflare.accountId, CLOUDFLARE_API_TOKEN: secrets.CLOUDFLARE_API_TOKEN } });
-  } catch { throw new Error('wrangler deploy failed (output not shown, it may hold secrets); run it by hand to see why'); }
 }
 
 // On a terminal: ask, one thing at a time, only what the answers file did not give, offering what detection found.
@@ -423,27 +173,12 @@ function parseArgs(argv) {
     else if (a === '--detect') o.detect = true;
     else if (a === '--prereqs') o.prereqs = true;
     else if (a === '--token-steps') o.tokenSteps = true;
-    else throw new Error(`unsupported option ${JSON.stringify(a)}; use --deployment <id>, --answers <file.json>, --resume, --yes, --prereqs, --detect, --token-steps`);
+    else if (a === '--web') o.web = true;
+    else throw new Error(`unsupported option ${JSON.stringify(a)}; use --deployment <id>, --answers <file.json>, --resume, --yes, --prereqs, --detect, --token-steps, --web`);
   }
   if (o.deployment !== undefined && (!ID.test(o.deployment) || o.deployment === 'all')) throw new Error('invalid --deployment id');
   if ('answers' in o && !o.answers) throw new Error('--answers needs a file');
   return o;
-}
-
-async function onlyState(root) {
-  let files = [];
-  try { files = (await readdir(path.join(root, STATE_DIR))).filter(f => f.endsWith('.json')); } catch {}
-  if (files.length !== 1) throw new Error(files.length ? 'several setups in progress: name one with --deployment <id>' : 'nothing to resume: run setup without --resume first');
-  return files[0].slice(0, -5);
-}
-async function readState(file) {
-  try { return JSON.parse(await readFile(file, 'utf8')); } catch { return null; }
-}
-async function exists(file) {
-  try { await lstat(file); return true; } catch { return false; }
-}
-function ignored(root, rel) {
-  try { execFileSync('git', ['check-ignore', '-q', '--', rel], { cwd: root, stdio: 'pipe' }); return true; } catch { return false; }
 }
 
 if (isMain(import.meta.url)) process.exitCode = await setup({ argv: process.argv.slice(2) });

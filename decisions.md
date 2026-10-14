@@ -11,3 +11,9 @@ The bridge has no sign-in of its own: with ACCESS_* unset, /authorize answers "S
 
 ## 2026-10-14 access:provision uses a reusable Access policy
 New Access applications cannot take legacy app-scoped policies (POST /access/apps/{id}/policies), so the provisioner creates a reusable policy (POST /access/policies, include the group) and passes its id in the app's `policies` on create. The SaaS app's client secret is returned only on create; a lost one is regenerated in the dashboard and entered with secrets:fill.
+
+## 2026-10-14 Setup in the browser shares one engine with the terminal
+`pnpm run setup -- --web` serves a hand-written page from a local Node server; the step loop moved into `bin/setup-engine.mjs` (runSteps with `until`) and the questions into `bin/setup-questions.mjs`, worded from the skill and tested against it, so the page renders and posts only. The page polls (/api/state every 2s, /api/run for step output) rather than using server-sent events: simpler to test, and fast enough. Rejected: a framework or build step, and taking the master token in the browser; secrets:mint stays in the person's own terminal and the page notices the filled secrets.json. Every JSON response is scrubbed of each secrets.json value as a second line behind the engine's redactor.
+
+## 2026-10-14 Off-site setup steps live in docs/guides, one copy
+The master token, wrangler login, Cloudflare sign-up and turning on Access are each a markdown guide with screenshots (docs/guides/, docs/images/). bin/guides.mjs parses them; --token-steps, the secrets pause, the prerequisites fix, the Access pause and the browser page all read them. Rejected: keeping TOKEN_STEPS in code and a condensed copy in the skill's Q10, which had already drifted.

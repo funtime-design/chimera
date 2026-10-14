@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { projectRoot } from './deployment.mjs';
+import { guideHeading, guideLines } from './guides.mjs';
 
 export const STATE_DIR = '.chimera-setup';
 const ID = /^[a-z0-9][a-z0-9_-]*$/;
@@ -210,10 +211,10 @@ export function prereqs(report) {
       detail: pnpm.value ? `version ${pnpm.value}` : 'not found', fix: 'run `corepack enable` (comes with Node), or `npm i -g pnpm`' },
     { key: 'cloudflare', required: true, label: 'A Cloudflare account (it runs the bridge)', status: accounts.length ? 'ok' : w.loggedIn ? 'missing' : 'unknown',
       detail: accounts.length ? accounts.map(a => a.name).join(', ') : w.loggedIn ? 'none found' : 'cannot tell until wrangler is logged in',
-      fix: 'sign up at https://dash.cloudflare.com/sign-up (the free plan is enough)' },
+      fix: 'sign up at https://dash.cloudflare.com/sign-up (the free plan is enough)', guide: 'cloudflare-account' },
     { key: 'wrangler', required: true, label: 'wrangler logged in to that account', status: w.loggedIn ? 'ok' : 'missing',
       detail: w.loggedIn ? (w.email ? `as ${w.email}` : 'yes') : w.installed ? 'not logged in' : 'not installed',
-      fix: w.installed ? 'run `npx wrangler login` (it opens the browser; no Cloudflare account yet? sign up at https://dash.cloudflare.com/sign-up first)' : 'run `pnpm install` in this folder, then `npx wrangler login`' },
+      fix: w.installed ? 'run `npx wrangler login` (it opens the browser; no Cloudflare account yet? sign up at https://dash.cloudflare.com/sign-up first)' : 'run `pnpm install` in this folder, then `npx wrangler login`', guide: 'wrangler-login' },
     { key: 'gh', required: false, label: 'GitHub account with `gh` logged in (only to deploy from GitHub Actions)', status: gh.ok ? 'ok' : 'optional',
       detail: gh.ok ? (gh.value.user ? `as ${gh.value.user}` : 'yes') : 'not set up; setup skips the GitHub secrets',
       fix: gh.value.installed ? 'run `gh auth login`' : 'run `brew install gh`, then `gh auth login`' },
@@ -236,6 +237,7 @@ export function formatPrereqs(list) {
   const blocker = list.find(p => p.required && p.status === 'missing');
   if (blocker) {
     lines.push(`Next: ${blocker.fix}.`);
+    if (blocker.guide) lines.push(guideHeading(blocker.guide), ...guideLines(blocker.guide).map(l => `  ${l}`));
     lines.push('Run again when done: pnpm run setup -- --prereqs');
   } else lines.push('All set: everything required is here.');
   return lines.join('\n');
