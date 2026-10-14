@@ -10,11 +10,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setup } from '../bin/setup.mjs';
 import { detect } from '../bin/setup-detect.mjs';
+import { accessFake } from './access-fake.mjs';
 
 const hex = n => randomBytes(n).toString('hex');
 const SECRET = {
   alice: `tok_alice_${hex(16)}`, bob: `tok_bob_${hex(16)}`, deploy: `cf_deploy_${hex(16)}`, access: `access_secret_${hex(12)}`,
-  account: hex(16), accessApi: `cf_access_api_${hex(12)}`,
+  account: hex(16), accessApi: `cf_access_api_${hex(12)}`, client: `client_secret_${hex(16)}`,
 };
 const EMAIL = { alice: 'alice@example.test', bob: 'bob@example.test' };
 const answers = (extra = {}) => ({ deployment: 'acme', displayName: 'Acme bridge', origin: 'https://bridge.example.test', accountId: SECRET.account, workerName: 'acme-bridge',
@@ -89,6 +90,8 @@ async function fillSecrets(root, extra = {}) {
   s.GOONBRIDGE_TOKENS = { alice: SECRET.alice, bob: SECRET.bob };
   s.CLOUDFLARE_API_TOKEN = SECRET.deploy;
   if ('ACCESS_CLIENT_SECRET' in s) s.ACCESS_CLIENT_SECRET = SECRET.access;
+  if (s.CLOUDFLARE_ACCESS_TOKEN === undefined && extra.CLOUDFLARE_ACCESS_TOKEN !== null) s.CLOUDFLARE_ACCESS_TOKEN = SECRET.accessApi;
+  for (const [k, v] of Object.entries(extra)) if (v === null) { delete s[k]; delete extra[k]; }
   await writeFile(file, JSON.stringify({ ...s, ...extra }));
 }
 function noSecrets(text, where) {
@@ -152,7 +155,7 @@ test('setup --answers writes config, lock and secrets, pauses for secrets, then 
   assert.deepEqual(live.seen.map(r => new URL(r.url).pathname), ['/v1/me', '/v1/version', '/v1/faults', '/mcp', '/v1/contract-check']);
   state = await stateClean(root);
   for (const step of ['config', 'secrets', 'validate', 'wrangler', 'push', 'deploy', 'contract']) assert.equal(state.steps[step].status, 'done', step);
-  assert.equal(state.steps.access, undefined, 'no Access step without Access');
+  assert.equal(state.steps.signin, undefined, 'no sign-in step without Access');
 
   calls.length = 0;
   const again = await runSetup(root, ['--deployment', 'acme']);
@@ -184,7 +187,7 @@ test('person names are checked: no dash, never reused, and nothing is written', 
 
 test('on a terminal it asks, re-asking for a dashed or reused name', async t => {
   const root = await sandbox(t);
-  const replies = ['acme', 'Acme bridge', '1', '', 'alice', EMAIL.alice, 'bob-smith', 'alice', 'bob', EMAIL.bob, 'n'];
+  const replies = ['acme', 'Acme bridge', '1', '', 'alice', EMAIL.alice, 'bob-smith', 'alice', 'bob', EMAIL.bob, '2', 'cid-term'];
   const asked = [];
   const prompt = async q => { asked.push(q); return replies.shift() ?? ''; };
   const r = await runSetup(root, [], { isTTY: true, prompt });
@@ -194,6 +197,9 @@ test('on a terminal it asks, re-asking for a dashed or reused name', async t => 
   const config = await read(root, 'deployments/acme/bridge.config.json');
   assert.equal(config.cloudflare.workerName, 'acme-bridge', 'default Worker name');
   assert.equal(config.deployment.origin, 'https://bridge.example.test', 'the detected domain, picked by number');
+  assert.match(r.text, /Cloudflare Access is Cloudflare's free login screen/);
+  assert.match(r.text, /How should people sign in\?\n  1\) Email code via Cloudflare Access \(recommended; setup creates it for you\)\n  2\) I already have an Access app/);
+  assert.equal(config.access.clientId, 'cid-term', 'option 2 asks for the client id');
   assert.equal((await read(root, 'deployments/acme/secrets.json')).cloudflare.accountId, SECRET.account, 'account ID detected, never asked');
   assert.ok(!asked.some(q => /account ID/i.test(q)), 'no account ID question when wrangler knows it');
   assert.deepEqual(config.members.map(m => m.name), ['alice', 'bob']);
@@ -219,15 +225,17 @@ test('no secret is printed on any failure path: push, deploy, contract, Access A
     const state = await stateClean(root);
     assert.ok(Object.values(state.steps).some(s => s.status === 'todo'), `${name}: the failed step stays todo`);
   }
-  // Access API failure (its body echoes the token and account).
+  // Access API failure while creating the sign-in (its body echoes the token, account and an email).
   const root = await sandbox(t);
-  await runSetup(root, ['--answers', await answersFile(root, answers({ access: { enabled: true, groupId: 'grp1' } }))]);
+  await runSetup(root, ['--answers', await answersFile(root, answers({ access: 'provision' }))]);
   await fillSecrets(root);
-  const api = async (url, init) => new URL(url).hostname === 'api.cloudflare.com' ? new Response(`bad ${SECRET.accessApi} ${SECRET.account}`, { status: 403 }) : bridge().fetchImpl(url, init);
-  const r = await runSetup(root, ['--deployment', 'acme', '--resume', '--yes'], { fetchImpl: api, env: { CLOUDFLARE_ACCESS_TOKEN: SECRET.accessApi } });
+  const api = accessFake({ token: SECRET.accessApi, account: SECRET.account, clientSecret: SECRET.client, fail: 'app', leak: [EMAIL.alice], fallback: bridge().fetchImpl });
+  const r = await runSetup(root, ['--deployment', 'acme', '--resume', '--yes'], { fetchImpl: api.fetchImpl });
   assert.equal(r.code, 1, r.text);
-  assert.match(r.text, /Access API refused/);
+  assert.match(r.text, /Access API refused POST \/apps/);
   noSecrets(r.text, 'Access API failure');
+  for (const email of Object.values(EMAIL)) assert.ok(!r.text.includes(email), 'no email printed');
+  assert.equal((await stateClean(root)).steps.signin.status, 'todo');
   // A corrupt secrets file holding a secret.
   const corrupt = await sandbox(t);
   await runSetup(corrupt, ['--answers', await answersFile(corrupt)]);
@@ -242,36 +250,64 @@ test('no secret is printed on any failure path: push, deploy, contract, Access A
   noSecrets(invalid.text, 'invalid secrets');
 });
 
-test('Cloudflare Access: prints the manual step per person, or adds the emails through the API when a token is present', async t => {
+test('sign-in "provision": setup creates the Access app after the tokens and before deploy, then goes live', async t => {
   const root = await sandbox(t);
-  await runSetup(root, ['--answers', await answersFile(root, answers({ access: true }))]);
-  assert.ok((await read(root, 'deployments/acme/bridge.config.json')).access, 'Access config block');
-  assert.ok('ACCESS_CLIENT_SECRET' in await read(root, 'deployments/acme/secrets.json'));
+  const first = await runSetup(root, ['--answers', await answersFile(root, answers({ access: 'Email code via Cloudflare Access (recommended; setup creates it for you)' }))]);
+  assert.equal(first.code, 2, first.text);
+  assert.equal((await read(root, 'deployments/acme/bridge.config.json')).access, undefined, 'access:provision writes the block later');
+  assert.ok(!('ACCESS_CLIENT_SECRET' in await read(root, 'deployments/acme/secrets.json')), 'no placeholder: the API returns the secret');
+  assert.match(first.text, /secrets:mint -- --deployment acme --access-token/);
+  assert.equal((await stateClean(root)).access, 'provision');
   await fillSecrets(root);
-  const manual = await runSetup(root, ['--deployment', 'acme', '--resume', '--yes']);
-  assert.equal(manual.code, 0, manual.text);
-  for (const email of Object.values(EMAIL)) assert.match(manual.text, new RegExp(`add ${email} to the Access group`));
-  assert.equal((await stateClean(root)).steps.access.status, 'manual');
-  noSecrets(manual.text, 'manual Access');
-
-  const viaApi = await sandbox(t);
-  await runSetup(viaApi, ['--answers', await answersFile(viaApi, answers({ access: { enabled: true, groupId: 'grp1' } }))]);
-  await fillSecrets(viaApi);
-  const puts = [];
-  const api = async (url, init) => {
-    const u = new URL(url);
-    if (u.hostname !== 'api.cloudflare.com') return bridge().fetchImpl(url, init);
-    assert.equal(u.pathname, `/client/v4/accounts/${SECRET.account}/access/groups/grp1`);
-    assert.equal(new Headers(init.headers).get('Authorization'), `Bearer ${SECRET.accessApi}`);
-    if (init.method === 'GET') return Response.json({ success: true, result: { name: 'Team List', include: [{ email: { email: EMAIL.alice } }] } });
-    puts.push(JSON.parse(init.body));
-    return Response.json({ success: true, result: {} });
-  };
-  const r = await runSetup(viaApi, ['--deployment', 'acme', '--resume', '--yes'], { fetchImpl: api, env: { CLOUDFLARE_ACCESS_TOKEN: SECRET.accessApi } });
+  const api = accessFake({ token: SECRET.accessApi, account: SECRET.account, clientSecret: SECRET.client, leak: [EMAIL.alice], fallback: bridge().fetchImpl });
+  const calls = [];
+  const r = await runSetup(root, ['--deployment', 'acme', '--resume', '--yes'], { fetchImpl: api.fetchImpl, run: async (command, args) => { calls.push(command); } });
   assert.equal(r.code, 0, r.text);
-  assert.deepEqual(puts, [{ name: 'Team List', include: [{ email: { email: EMAIL.alice } }, { email: { email: EMAIL.bob } }] }], 'only the missing email is added');
-  assert.equal((await stateClean(viaApi)).steps.access.status, 'done');
-  noSecrets(r.text, 'Access API');
+  const steps = r.text.split('\n').filter(l => /^Step \d+ of 8/.test(l));
+  assert.match(steps[2], /^Step 3 of 8: creating the sign-in \(Cloudflare Access\)/, 'right after the secrets');
+  assert.ok(r.text.indexOf('creating the sign-in') < r.text.indexOf('deploying the Worker'));
+  assert.equal(api.state.apps[0].name, 'Acme bridge sign-in');
+  assert.deepEqual(api.state.apps[0].saas_app.redirect_uris, ['https://bridge.example.test/callback']);
+  const config = await read(root, 'deployments/acme/bridge.config.json');
+  assert.equal(config.access.clientId, api.state.apps[0].saas_app.client_id);
+  assert.equal((await read(root, 'deployments/acme/secrets.json')).ACCESS_CLIENT_SECRET, SECRET.client);
+  const state = await stateClean(root);
+  for (const step of ['signin', 'validate', 'push', 'deploy', 'contract']) assert.equal(state.steps[step].status, 'done', step);
+  assert.ok(calls.includes('pnpm'), 'deployed');
+  noSecrets(r.text, 'provision');
+  for (const email of Object.values(EMAIL)) assert.ok(!r.text.includes(email), 'no email printed');
+});
+
+test('sign-in "provision" with Access not turned on: setup pauses before deploy with the one-time dashboard step', async t => {
+  const root = await sandbox(t);
+  await runSetup(root, ['--answers', await answersFile(root, answers({ access: 'provision' }))]);
+  await fillSecrets(root);
+  const api = accessFake({ token: SECRET.accessApi, account: SECRET.account, enabled: false, fallback: bridge().fetchImpl });
+  const calls = [];
+  const r = await runSetup(root, ['--deployment', 'acme', '--resume', '--yes'], { fetchImpl: api.fetchImpl, run: async command => { calls.push(command); } });
+  assert.equal(r.code, 2, r.text);
+  assert.match(r.text, /^--- show this ---\nCloudflare Access is not turned on/m);
+  assert.match(r.text, /https:\/\/one\.dash\.cloudflare\.com\//);
+  assert.deepEqual(calls, [], 'nothing pushed or deployed');
+  assert.equal((await stateClean(root)).steps.signin.status, 'todo');
+  noSecrets(r.text, 'disabled');
+});
+
+test('sign-in "existing": the client id goes into the config, the secret is asked by secrets:fill, setup only writes the URLs', async t => {
+  const root = await sandbox(t);
+  const first = await runSetup(root, ['--answers', await answersFile(root, answers({ access: 'I already have an Access app, use it (paste its client id when asked)', accessClientId: 'cid-mine' }))]);
+  assert.equal(first.code, 2, first.text);
+  assert.deepEqual((await read(root, 'deployments/acme/bridge.config.json')).access, { clientId: 'cid-mine', clientSecret: { env: 'ACCESS_CLIENT_SECRET' } });
+  assert.ok('ACCESS_CLIENT_SECRET' in await read(root, 'deployments/acme/secrets.json'), 'placeholder until secrets:fill');
+  assert.match(first.text, /ACCESS_CLIENT_SECRET/);
+  await fillSecrets(root);
+  const api = accessFake({ token: SECRET.accessApi, account: SECRET.account, fallback: bridge().fetchImpl });
+  api.state.apps.push({ id: 'app-x', name: 'Mine', type: 'saas', saas_app: { client_id: 'cid-mine', redirect_uris: ['https://bridge.example.test/callback'] } });
+  const r = await runSetup(root, ['--deployment', 'acme', '--resume', '--yes'], { fetchImpl: api.fetchImpl });
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual(api.calls.filter(c => c.method !== 'GET'), [], 'nothing created in Cloudflare');
+  assert.match((await read(root, 'deployments/acme/bridge.config.json')).access.jwksUrl, /\/cdn-cgi\/access\/sso\/oidc\/cid-mine\/jwks$/);
+  noSecrets(r.text, 'existing');
 });
 
 test('with a minter token, setup fills the new secrets.json through secrets:mint and goes on without printing a value', async t => {
@@ -379,15 +415,16 @@ test('a token pause shows the waiting line and the exact commands inside show ma
   assert.match(r.text, /--- show this ---\n\s*Result: waiting for the tokens[\s\S]*pnpm secrets:mint -- --deployment acme[\s\S]*https:\/\/dash\.cloudflare\.com\/profile\/api-tokens[\s\S]*--resume\n--- end ---/);
 });
 
-// A real run: the person picked "No, token sign-in only (simplest)", yet Access ended up on. Whatever form the answer
-// takes (boolean, the strings an agent may write, the option label itself, or no key at all), No means no Access block,
-// state access false, and secrets:mint never asks for ACCESS_CLIENT_SECRET. Only a yes turns it on.
-test('Access: No in any form (or no answer) writes no access block and records access false; Yes writes the block', async t => {
+// A real run once picked "No" yet ended with Access on. Whatever form the answer takes (boolean, the strings an agent
+// may write, the option label itself, or no key at all), each maps to exactly one mode: false writes no access block and
+// no sign-in step, "provision" writes none yet (access:provision does), "existing" writes the block with its secret.
+test('Access answers: every form maps to one mode, and only "existing" writes an access block up front', async t => {
   const cases = [
-    [false, false], ['no', false], ['false', false], ['No, token sign-in only (simplest)', false], [undefined, false],
-    [true, true], ['yes', true], ['Yes, it is already in front of this domain', true],
+    [false, false], ['no', false], ['false', false], [undefined, false],
+    ['provision', 'provision'], ['Email code via Cloudflare Access (recommended; setup creates it for you)', 'provision'],
+    ['existing', 'existing'], [true, 'existing'], ['yes', 'existing'], ['I already have an Access app, use it (paste its client id when asked)', 'existing'],
   ];
-  for (const [value, on] of cases) {
+  for (const [value, mode] of cases) {
     const root = await sandbox(t);
     const a = answers();
     if (value === undefined) delete a.access; else a.access = value;
@@ -395,13 +432,14 @@ test('Access: No in any form (or no answer) writes no access block and records a
     const label = `access ${JSON.stringify(value)}`;
     assert.equal(r.code, 2, `${label}: pauses for the tokens\n${r.text}`);
     const config = await read(root, 'deployments/acme/bridge.config.json');
-    assert.equal(!!config.access, on, `${label}: access block ${on ? 'present' : 'absent'}`);
+    assert.equal(!!config.access, mode === 'existing', `${label}: access block only for existing`);
     const state = await stateClean(root);
-    assert.equal(state.access, on, `${label}: state access ${on}`);
+    assert.equal(state.access, mode, `${label}: state access ${mode}`);
     const secrets = await read(root, 'deployments/acme/secrets.json');
-    assert.equal('ACCESS_CLIENT_SECRET' in secrets, on, `${label}: ACCESS_CLIENT_SECRET placeholder only with Access`);
-    assert.equal(/ACCESS_CLIENT_SECRET/.test(r.text), on, `${label}: the token pause names ACCESS_CLIENT_SECRET only with Access`);
-    if (!on) assert.doesNotMatch(r.text, /Access group/, `${label}: no Access step`);
+    assert.equal('ACCESS_CLIENT_SECRET' in secrets, mode === 'existing', `${label}: ACCESS_CLIENT_SECRET placeholder only for existing`);
+    assert.equal(/ACCESS_CLIENT_SECRET/.test(r.text), mode === 'existing', `${label}: the token pause names ACCESS_CLIENT_SECRET only for existing`);
+    assert.equal(/ of 8: /.test(r.text), !!mode, `${label}: 8 steps with sign-in, 7 without`);
+    if (!mode) assert.doesNotMatch(r.text, /sign-in \(Cloudflare Access\)/, `${label}: no sign-in step`);
   }
 });
 
@@ -409,6 +447,6 @@ test('Access: an answer that is neither yes nor no is refused, not guessed', asy
   const root = await sandbox(t);
   const r = await runSetup(root, ['--answers', await answersFile(root, answers({ access: 'maybe later' }))]);
   assert.equal(r.code, 1, r.text);
-  assert.match(r.text, /access: true, false/);
+  assert.match(r.text, /access: "provision" \(setup creates the sign-in\), "existing" \(you have an Access app\) or false/);
   assert.ok(!await exists(path.join(root, 'deployments/acme')), 'nothing written');
 });

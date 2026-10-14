@@ -15,6 +15,7 @@ export type Secrets = {
   GOONBRIDGE_MEMBERS?: Record<string, string>;
   cloudflare: { accountId: string };
   CLOUDFLARE_API_TOKEN: string;
+  CLOUDFLARE_ACCESS_TOKEN?: string;
   contractToken: string;
   [key: `GOONBRIDGE_ROUTINE_${string}`]: string;
 };
@@ -24,7 +25,7 @@ export function runtimeSecrets(s: Secrets, c: BridgeConfig): Record<string, stri
   const out: Record<string, string> = Object.create(null);
   const put = (name: string | undefined, value: string | undefined) => {
     if (!name || value === undefined) return;
-    if (['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'].includes(name)) throw new Error('secrets: deploy-only value cannot be a runtime reference');
+    if (['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_ACCESS_TOKEN'].includes(name)) throw new Error('secrets: deploy-only value cannot be a runtime reference');
     if (Object.hasOwn(out, name) && out[name] !== value) throw new Error('secrets: conflicting runtime references');
     out[name] = value;
   };

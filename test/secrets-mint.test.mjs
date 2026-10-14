@@ -32,7 +32,7 @@ async function sandbox(t, a = answers()) {
   return root;
 }
 // Fake Cloudflare API. Echoes the presented credential in error bodies so a leak would show.
-function cloudflare({ refuseWorkerScope = false, fail } = {}) {
+function cloudflare({ refuseWorkerScope = false, fail, accessGroups = true } = {}) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     calls.push({ url, method: init.method ?? 'GET', auth: init.headers?.Authorization, body: init.body && JSON.parse(init.body) });
@@ -41,7 +41,8 @@ function cloudflare({ refuseWorkerScope = false, fail } = {}) {
     const p = new URL(url).pathname;
     if (p === `/client/v4/accounts/${SECRET.account}/tokens/permission_groups`) {
       if (fail === 'groups') return Response.json({ success: false, errors: [{ message: `oops ${SECRET.minter}` }] }, { status: 500 });
-      return Response.json({ success: true, result: [{ id: 'pg-other', name: 'Zone Read' }, { id: 'pg-editor', name: 'Workers Editor' }] });
+      return Response.json({ success: true, result: [{ id: 'pg-other', name: 'Zone Read' }, { id: 'pg-editor', name: 'Workers Editor' },
+        ...(accessGroups ? [{ id: 'pg-apps', name: 'Access: Apps and Policies Write' }, { id: 'pg-orgs', name: 'Access: Organizations, Identity Providers, and Groups Write' }] : [])] });
     }
     if (p === `/client/v4/accounts/${SECRET.account}/tokens` && init.method === 'POST') {
       const body = JSON.parse(init.body);
@@ -295,4 +296,39 @@ test('Access off: secrets:mint never mentions or asks for ACCESS_CLIENT_SECRET',
   assert.ok(!events.some(e => /^ASK.*ACCESS_CLIENT_SECRET/.test(e)), 'no Access prompt');
   assert.doesNotMatch(events[at(events, /^Will mint:/)], /ACCESS_CLIENT_SECRET/);
   assert.doesNotMatch(text, /ACCESS_CLIENT_SECRET.*this deployment uses it/);
+});
+
+test('--access-token also mints CLOUDFLARE_ACCESS_TOKEN (Access apps, policies and groups, 90 days) with its Key Vault expiry line', async t => {
+  const root = await sandbox(t, answers({ access: 'provision' }));
+  const cf = cloudflare();
+  const { code, text } = await run(root, ['--access-token'], { fetchImpl: cf.fetchImpl });
+  assert.equal(code, 0, text);
+  const s = await read(root);
+  assert.equal(s.CLOUDFLARE_ACCESS_TOKEN, SECRET.minted);
+  const access = cf.calls.find(c => c.method === 'POST' && c.body?.name === 'chimera-acme-bridge-access');
+  assert.ok(access, 'an Access token was minted');
+  assert.deepEqual(access.body.policies[0].permission_groups, [{ id: 'pg-apps' }, { id: 'pg-orgs' }]);
+  assert.deepEqual(access.body.policies[0].resources, { [`com.cloudflare.api.account.${SECRET.account}`]: '*' });
+  const days = (Date.parse(access.body.expires_on) - Date.now()) / 86400000;
+  assert.ok(days > 89 && days <= 90, `90 days, got ${days}`);
+  assert.match(text, /minted CLOUDFLARE_ACCESS_TOKEN \(90 days\)/);
+  assert.match(text, /az keyvault secret set-attributes --vault-name <vault> --name CLOUDFLARE_ACCESS_TOKEN --expires \d{4}-/);
+  noLeak(text, 'access token', generatedValues(s));
+  // Without the flag (and no token in the file yet), no Access token.
+  const plain = await sandbox(t);
+  const quiet = cloudflare();
+  await run(plain, [], { fetchImpl: quiet.fetchImpl });
+  assert.ok(!quiet.calls.some(c => c.body?.name?.endsWith('-access')), 'not minted without --access-token');
+});
+
+test('an Access token Cloudflare refuses is reported, and the rest of mint still finishes', async t => {
+  const root = await sandbox(t, answers({ access: 'provision' }));
+  const { code, text } = await run(root, ['--access-token'], { fetchImpl: cloudflare({ accessGroups: false }).fetchImpl });
+  assert.equal(code, 0, text);
+  const s = await read(root);
+  assert.equal(s.CLOUDFLARE_ACCESS_TOKEN, undefined);
+  assert.equal(s.CLOUDFLARE_API_TOKEN, SECRET.minted);
+  assert.match(text, /could not mint CLOUDFLARE_ACCESS_TOKEN/);
+  assert.doesNotMatch(text, /CLOUDFLARE_ACCESS_TOKEN: minted/);
+  noLeak(text, 'refused access token', generatedValues(s));
 });

@@ -30,7 +30,7 @@ The person sees only what you write, never the tool output. So you relay script 
 ## Wording rules
 
 - Plain language, short sentences. Answer first, detail after.
-- Define a term the first time you use it: "a Worker is the Cloudflare service that runs the bridge"; "Cloudflare Access is a sign-in screen Cloudflare can put in front of a site"; "wrangler is Cloudflare's command-line tool".
+- Define a term the first time you use it: "a Worker is the Cloudflare service that runs the bridge"; "Cloudflare Access is Cloudflare's free login screen: it emails a one-time code"; "wrangler is Cloudflare's command-line tool".
 - Never ask for something detection already found. Never ask for the 32-character account ID when wrangler can supply it.
 - Every "go here" is a concrete path or URL, such as "Cloudflare dashboard > Websites" or https://dash.cloudflare.com/profile/api-tokens. Never just "from the dashboard".
 - Never put more than one question in a message, and never send a numbered list of questions. One AskUserQuestion per turn, 2 to 4 options, each with a one-line description. The tool adds "Other" for free text by itself.
@@ -114,16 +114,25 @@ Options:
 
 If `fields.admins` is `needs-answer`, the options are **Type a name and email** (choose Other) and **Use my GitHub email** (read it with `gh api user --jq .email`).
 
-### Q6. Cloudflare Access
+### Q6. Cloudflare Access sign-in
 
-AskUserQuestion, header "Sign-in", question "Should people sign in through Cloudflare Access? Cloudflare Access is a sign-in screen Cloudflare can put in front of a site."
+People sign in to the bridge only through Cloudflare Access; the bridge has no sign-in of its own. So the question is not whether to use Access, only who creates it. AskUserQuestion, header "Sign-in", question "How should people sign in?", with this description line first, word for word: "Cloudflare Access is Cloudflare's free login screen: it emails a one-time code and lets in only the emails on your list. No tokens for people; tokens are only for scripts and cloud sessions."
 Options:
-- **No, token sign-in only (simplest)**: each person gets a private token; nothing else to set up. You can add Access later.
-- **Yes, it is already in front of this domain**: you already set Access up at https://one.dash.cloudflare.com > Access > Applications; setup lists who to add to the Access group.
+- **Email code via Cloudflare Access (recommended; setup creates it for you)**: setup makes the login screen, the list of allowed emails and the app through the Cloudflare API; the only manual step is turning Access on once, if it is off.
+- **I already have an Access app, use it (paste its client id when asked)**: for an Access for SaaS app you made yourself; you paste its client id next and its secret into a hidden prompt later.
 
-The answer goes in `access` as a JSON boolean: **No** writes `"access": false`, **Yes** writes `"access": true`. Never a string, never the option label. Leaving the key out also means no Access.
+The answer goes in `access` as one of two JSON strings: the first option writes `"access": "provision"`, the second `"access": "existing"`. Never the option label, never a boolean. (An answers file may say `"access": false` for a bridge only scripts use; never offer that here, since then no person can sign in.)
 
-If the person asks what this means instead of picking, explain in one or two sentences, then ask Q6 again with the same two options, word for word. Do not reword an option (a reworded "Yes" invites a yes the person did not mean). Echo the answer in Q9 as "Access: no" or "Access: yes".
+If the person asks what this means instead of picking, explain in one or two sentences, then ask Q6 again with the same two options, word for word. Do not reword an option. Echo the answer in Q9 as "Sign-in: email code, setup creates it" or "Sign-in: your Access app".
+
+### Q6.1 Access app client id
+
+Only after "I already have an Access app". AskUserQuestion, header "Client id", question "Paste your Access app's client id. It is in Zero Trust (https://one.dash.cloudflare.com/) > Access controls > Applications > your app > Configure, under the OIDC settings. It is not secret; the client secret goes into a hidden prompt later."
+Options:
+- **Paste the client id**: choose Other and paste it.
+- **Create one for me instead**: switches the answer to `"access": "provision"`.
+
+The client id goes in `accessClientId`. The client secret never goes in chat: `pnpm secrets:fill -- --deployment <id> --only ACCESS_CLIENT_SECRET` asks for it in a masked prompt in the person's own terminal.
 
 ### Q7. More people
 
@@ -143,7 +152,7 @@ The answers go in `members` as `{ "name", "email" }`.
 
 ### Q9. Confirm before anything is written
 
-AskUserQuestion, header "Confirm", with a short summary in the question: name, address, admin, other people, Access yes/no, and "GitHub Actions secrets: yes/no" from `fields.githubActions`.
+AskUserQuestion, header "Confirm", with a short summary in the question: name, address, admin, other people, sign-in, and "GitHub Actions secrets: yes/no" from `fields.githubActions`.
 Options:
 - **Yes, set it up**: writes the settings and starts the steps.
 - **Change something**: say which answer, then ask that one question again.
@@ -159,7 +168,7 @@ pnpm run setup -- --answers "$TMPDIR/chimera-answers.json"
 
 ```json
 { "deployment": "acme", "displayName": "Acme bridge", "origin": "https://bridge.example.com",
-  "admins": [{ "name": "alice", "email": "alice@example.com" }], "members": [], "access": false }
+  "admins": [{ "name": "alice", "email": "alice@example.com" }], "members": [], "access": "provision" }
 ```
 
 Delete the answers file once step 1 is done. Exit codes: **0** done; **2** waiting for the person; **1** error (the message says what to fix; it never holds a secret). Exit 2 with "needs-answer: a, b" lists exactly the fields still missing, each with where to get it: ask those, one question per turn, and run again.
@@ -167,7 +176,7 @@ Delete the answers file once step 1 is done. Exit codes: **0** done; **2** waiti
 Setup prints "Step N of M: <what>" and a "Result:" line per step. Relay both lines verbatim for every step, one step after another, never merged; for example:
 
 ```
-Step 1 of 7: writing the bridge settings (bridge.config.json and deployment.lock.json)
+Step 1 of 8: writing the bridge settings (bridge.config.json and deployment.lock.json)
   Result: done
 ```
 
@@ -208,13 +217,23 @@ Options:
 
 Re-running when everything is done prints the status and exits 0. `--resume` always starts with a done/todo checklist in a show block; print it verbatim.
 
-## Step 6: Cloudflare Access (only if Q6 was yes)
+## Step 6: creating the sign-in (Cloudflare Access)
 
-Each person must also be in the Access group. Setup prints "add <email> to the Access group" per person (Zero Trust > Access > Access groups at https://one.dash.cloudflare.com), or does it through the API when `CLOUDFLARE_ACCESS_TOKEN` (a token that can edit Access groups) is set and the answers name `access.groupId`.
+After the tokens and before anything goes live, setup runs "Step 3 of 8: creating the sign-in (Cloudflare Access)" (`pnpm access:provision -- --deployment <id>`). Relay its lines verbatim, show blocks included.
+
+- **"provision"**: it creates, or finds on a re-run, the One-time PIN login, the Access group "<display name> members" with every person's email, an allow policy for that group, and the app "<display name> sign-in" with the redirect URL `<origin>/callback`. It writes the client id and sign-in URLs into bridge.config.json (commit it) and the client secret into secrets.json. Only names are printed, never emails.
+- **"existing"**: it finds the app by `accessClientId` and writes only its URLs. Who may sign in stays in that app's own policy.
+- **Access is off for the account** (exit 2): the show block names the one-time step at https://one.dash.cloudflare.com/ (pick a team name and the Free plan). Print it, wait until the person says it is done, then resume.
+- **No Access token** (exit 2): `secrets:mint` mints `CLOUDFLARE_ACCESS_TOKEN` when run with `--access-token` (setup's pause message already says so). Print the show block and wait.
+- **The app exists but its secret is missing** (exit 2): the show block says how to regenerate it in the dashboard and enter it with `secrets:fill`. Print it and wait.
+
+## Adding people later
+
+Add the person to `members` in bridge.config.json and their email to `GOONBRIDGE_MEMBERS` in secrets.json, then run `pnpm run members:sync -- --deployment <id>` (it adds and removes emails in the Access group and prints names only), `pnpm secrets:push -- --deployment <id>` and redeploy. With `CLOUDFLARE_ACCESS_TOKEN` in GitHub Actions, the deploy workflow runs members:sync by itself.
 
 ## Step 7: check the live bridge
 
-An admin's token or Access sign-in reads `GET <origin>/docs/status`:
+An admin's Access sign-in (or a script's token) reads `GET <origin>/docs/status`:
 
 ```json
 { "deployment": "acme", "version": { "engine": "0.1.0", "schema": 2, "build": "..." }, "members": 2, "devices_registered": 0, "last_contract_check": "2026-10-13T...", "access": true }
@@ -224,5 +243,5 @@ An admin's token or Access sign-in reads `GET <origin>/docs/status`:
 
 ## What changes later, and where
 
-- People, admins, names, domain, timings and labels: edit `deployments/<id>/bridge.config.json` (emails and tokens in `secrets.json`), then `pnpm secrets:push` and redeploy. There is no in-app user registration.
+- People, admins, names, domain, timings and labels: edit `deployments/<id>/bridge.config.json` (emails and tokens in `secrets.json`), then `pnpm run members:sync -- --deployment <id>`, `pnpm secrets:push` and redeploy. There is no in-app user registration.
 - Devices and per-device permissions: an admin on `<origin>/docs/settings`.

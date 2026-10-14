@@ -16,6 +16,8 @@
 
 ## Connect
 
+People never type a token. Every client below except scripts and cloud sessions signs in the same way: a confirm page on the bridge, then Cloudflare Access emails a one-time code to your address, and only emails on the member list get in. Static tokens are for scripts, cloud sessions and the Mac responder only.
+
 - Claude Code (Mac): `claude mcp add --scope user --transport http {{SETUP.connectorName}} {{BASE_URL}}/mcp`, no header. Then `/mcp` -> {{SETUP.connectorName}} -> authenticate: sign in with Cloudflare Access and pick this Mac's device (for example `{{SETUP.exampleDevice}}`) on the confirm page. A configured `Authorization` header turns Claude Code's OAuth sign-in off, so leave it out.
   Each Claude Code window on the Mac is its own child of the device (`{{SETUP.exampleDevice}}-x7k`), like a cloud session, with no session header: the bridge hands out an `Mcp-Session-Id` when the window connects and Claude Code sends it back on every call. Optionally add `--header '{{SETUP.contextHeader}}: ${{{SETUP.envPrefix}}_CONTEXT:-}'` to put a context in the name (`{{SETUP.exampleDevice}}-x7k-<context>`). The responder and other REST clients have no MCP session and stay plain `{{SETUP.exampleDevice}}`.
 - A Mac that should answer while nobody is at it: see "Headless device (responder)".

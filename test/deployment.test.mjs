@@ -84,6 +84,19 @@ test('dry run prints only names/actions; real run injects wrangler and gh stdin,
   await assert.rejects(pushSecrets({ root, deployment: 'example', run: async () => { throw new Error('sensitive-sentinel'); }, log: () => {} }), e => !e.message.includes('sensitive-sentinel'));
 });
 
+test('with CLOUDFLARE_ACCESS_TOKEN, push gives GitHub Actions the Access token and the email map (for members:sync), never the Worker', async t => {
+  const { pushSecrets } = await import('../bin/secrets-push.mjs');
+  const root = await repo(t), calls = [];
+  const s = { ...(await secrets()), CLOUDFLARE_ACCESS_TOKEN: 'access-token-sentinel' };
+  await writeFile(path.join(root, 'deployments/example/secrets.json'), JSON.stringify(s));
+  await pushSecrets({ root, deployment: 'example', run: async (command, args, options) => calls.push({ command, args, ...options }), log: () => {} });
+  const gh = calls.filter(c => c.command === 'gh');
+  assert.equal(gh.find(c => c.args.includes('CLOUDFLARE_ACCESS_TOKEN')).input, 'access-token-sentinel');
+  assert.deepEqual(JSON.parse(gh.find(c => c.args.includes('GOONBRIDGE_MEMBERS')).input), s.GOONBRIDGE_MEMBERS);
+  assert.ok(!calls.some(c => c.command === 'npx' && c.args.includes('CLOUDFLARE_ACCESS_TOKEN')), 'never a Worker secret');
+  assert.ok(!calls.some(c => c.command === 'npx' && c.input === 'access-token-sentinel'));
+});
+
 // Owner-mode baseline: each deployment folder with a frozen private Wrangler capture (.private/fixtures/<id>/wrangler.json).
 const wranglerBaselines = baselineDeployments('wrangler.json');
 test('deployment generator matches its deployed baseline except env account ID, deterministically', { skip: skipUnless(wranglerBaselines, 'wrangler.json') }, async () => {

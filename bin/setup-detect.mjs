@@ -135,7 +135,7 @@ export async function detect({ root = projectRoot, run = capture, fetchImpl = fe
       ? field([{ name: person, email }], 'detected', 'From `git config user.name` and `git config user.email`; an admin opens the status and settings pages.')
       : field(null, 'needs-answer', 'Your name (lowercase, no dash) and the email you sign in with; set a default with `git config --global user.email you@example.com`.'),
     members: field([], 'default', 'Other people who use the bridge: a name (lowercase, no dash) and sign-in email each; none is fine to start.'),
-    access: field(false, 'default', 'Cloudflare Access is a sign-in screen Cloudflare can put in front of a site (Zero Trust > Access > Applications at https://one.dash.cloudflare.com); without it people sign in with a token. Off unless the answer is true.'),
+    access: field(false, 'default', 'How people sign in: "provision" (setup creates a Cloudflare Access email-code sign-in), or "existing" (you already have an Access for SaaS app; give its client id as accessClientId). Cloudflare Access is the only way people sign in; without it (false, the default when unanswered) only scripts and cloud sessions connect, with tokens.'),
     githubActions: field(ghLoggedIn, 'default', ghLoggedIn ? 'gh is logged in, so setup also copies the deploy secrets to GitHub Actions.' : 'gh is not logged in, so setup skips the GitHub Actions secrets; run `gh auth login` to include them.'),
     existingDeployments: field(existing, 'detected', 'Folders under deployments/.'),
     setupInProgress: field(inProgress, 'detected', 'Saved progress in .chimera-setup/; resume with `pnpm run setup -- --deployment <id> --resume`.'),
@@ -152,15 +152,19 @@ export function publicView(report) {
 
 // Answers file first, detection for the rest. Returns the merged answers and the fields still needing a person.
 const REQUIRED = ['deployment', 'displayName', 'origin', 'accountId', 'workerName', 'admins'];
-// The Access answer as a boolean (or the { enabled, groupId } object). Off unless the answer clearly says yes: a missing
-// key, false, null, "no", "false" or the "No, token sign-in only" option label are all off. Anything else is left as
-// given, so checkAnswers refuses it instead of guessing.
+// The sign-in answer as "provision", "existing" or false. Off unless the answer clearly picks one: a missing key, false,
+// null, "no" or "false" are all off. The option labels map to their mode ("Email code ..." is provision, "I already
+// have ..." is existing); true and { enabled: true } are the old "Access is already in front" answer, so existing.
+// Anything else is left as given, so checkAnswers refuses it instead of guessing.
 export function accessAnswer(v) {
-  if (v === undefined || v === null || v === '') return false;
+  if (v === undefined || v === null || v === '' || v === false) return false;
+  if (v === true) return 'existing';
+  if (typeof v === 'object') return v.enabled === true ? 'existing' : v.enabled === false ? false : v;
   if (typeof v !== 'string') return v;
   const t = v.trim().toLowerCase();
   if (/^(no|n|false|off)\b/.test(t)) return false;
-  if (/^(yes|y|true|on)\b/.test(t)) return true;
+  if (/^(provision|email code|auto)/.test(t)) return 'provision';
+  if (/^(existing|i already have|yes|y|true|on)\b/.test(t)) return 'existing';
   return v;
 }
 export function mergeAnswers(given = {}, report) {
