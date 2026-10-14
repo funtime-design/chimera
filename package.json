@@ -12,7 +12,7 @@
     "dev": "wrangler dev",
     "typecheck": "tsc --noEmit",
     "build:responder": "node bin/build-responder.mjs",
-    "pretest": "pnpm build:responder",
+    "pretest": "node bin/test-guard.mjs && pnpm build:responder",
     "test": "node --test --test-concurrency=1 test/*.test.mjs",
     "deploy": "wrangler deploy",
     "test:engine": "node test/harness/setup.mjs",

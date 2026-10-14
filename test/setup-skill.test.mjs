@@ -78,3 +78,16 @@ test('--token-steps prints 6 numbered steps with the dashboard URL', () => {
   assert.match(out, /^--- show this ---$/m);
   assert.match(out, /^--- end ---$/m);
 });
+
+test('Access is written as a JSON boolean and re-asked word for word; the deployment id offers <name>-test first', () => {
+  const access = blocks.find(b => /cloudflare access/i.test(b.split('\n')[0]));
+  assert.match(access, /JSON boolean/);
+  assert.match(access, /"access": false/);
+  assert.match(access, /"access": true/);
+  assert.match(access, /[Nn]ever a string/);
+  assert.match(access, /same two options, word for word/);
+  const id = blocks.find(b => /deployment id/i.test(b.split('\n')[0]));
+  assert.match(id, /fields\.deployment\.choices/);
+  assert.match(id, /<name>-test/);
+  assert.match(id, /throwaway for testing; use <name> when you migrate the live bridge/);
+});

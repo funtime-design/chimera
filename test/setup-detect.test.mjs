@@ -12,7 +12,7 @@ const hex = n => randomBytes(n).toString('hex');
 const ACCOUNT = hex(16), TOKEN = `oauth_${hex(16)}`;
 
 // One stubbed machine. Keys are "command arg arg"; a missing key is a command that is not installed (exit 127).
-function machine({ loggedIn = true, accounts = [{ id: ACCOUNT, name: 'Alice Account' }], gh = true, pnpm = true, git = true, zones = ['example.test'], subdomain = 'alice-sub' } = {}) {
+function machine({ loggedIn = true, accounts = [{ id: ACCOUNT, name: 'Alice Account' }], gh = true, pnpm = true, git = true, zones = ['example.test'], subdomain = 'alice-sub', workers = [] } = {}) {
   const commands = {
     'npx wrangler whoami --json': loggedIn ? { code: 0, stdout: JSON.stringify({ loggedIn: true, authType: 'OAuth Token', email: 'alice@example.test', accounts }) }
       : { code: 1, stdout: JSON.stringify({ loggedIn: false }), stderr: 'You are not authenticated. Please run `wrangler login`.' },
@@ -30,6 +30,7 @@ function machine({ loggedIn = true, accounts = [{ id: ACCOUNT, name: 'Alice Acco
     const u = new URL(url);
     if (u.pathname === '/client/v4/zones') return Response.json({ success: true, result: (zones ?? []).map(name => ({ name, account: { id: ACCOUNT } })) });
     if (u.pathname === `/client/v4/accounts/${ACCOUNT}/workers/subdomain`) return Response.json({ success: true, result: { subdomain } });
+    if (u.pathname === `/client/v4/accounts/${ACCOUNT}/workers/scripts`) return Response.json({ success: true, result: workers.map(id => ({ id })) });
     return Response.json({ success: false }, { status: 404 });
   };
   return { run, fetchImpl, calls, requests };
@@ -59,7 +60,8 @@ test('logged in: account, zones, git admin and defaults are detected; the token 
   assert.equal(r.fields.deployment.source, 'default');
   assert.deepEqual(r.fields.admins.value, [{ name: 'alice', email: 'alice@example.test' }]);
   assert.equal(r.fields.admins.source, 'detected');
-  assert.equal(r.fields.access.source, 'needs-answer');
+  assert.equal(r.fields.access.source, 'default');
+  assert.equal(r.fields.access.value, false, 'Access is off unless answered yes');
   assert.deepEqual(r.fields.existingDeployments.value, ['example', 'staging']);
   assert.deepEqual(r.fields.setupInProgress.value, ['old']);
   assert.equal(r.fields.githubActions.value, true);
@@ -141,10 +143,12 @@ test('mergeAnswers: the answers file wins, detect fills the rest, workers.dev re
   const m = machine();
   const r = await detect({ root: await root(t), run: m.run, fetchImpl: m.fetchImpl, env: {}, nodeVersion: '22.18.0' });
   const partial = mergeAnswers({ displayName: 'Team bridge' }, r);
-  assert.deepEqual(partial.missing, ['access', 'origin']);
+  assert.deepEqual(partial.missing, ['origin']);
+  assert.equal(partial.answers.access, false, 'no access key means off');
   assert.equal(partial.answers.displayName, 'Team bridge');
   assert.equal(partial.answers.accountId, ACCOUNT);
-  assert.equal(partial.answers.workerName, 'alice-bridge');
+  assert.equal(partial.answers.deployment, 'alice-test', 'a first run defaults to the throwaway test id');
+  assert.equal(partial.answers.workerName, 'alice-test-bridge');
   const full = mergeAnswers({ deployment: 'team', origin: 'workers.dev', access: false }, r);
   assert.deepEqual(full.missing, []);
   assert.equal(full.answers.origin, 'https://team-bridge.alice-sub.workers.dev');
@@ -153,4 +157,33 @@ test('mergeAnswers: the answers file wins, detect fills the rest, workers.dev re
   assert.deepEqual(full.answers.members, []);
   const out = await detect({ root: await root(t), run: machine({ loggedIn: false }).run, fetchImpl: m.fetchImpl, env: {}, nodeVersion: '22.18.0' });
   assert.deepEqual(mergeAnswers({ origin: 'https://bridge.example.test', access: true }, out).missing, ['accountId']);
+});
+
+// A real run named its first, throwaway deployment after the owner ("gunwa"), the id of the live bridge and of the owner's
+// GOONBRIDGE_TOKENS entry. The plain name stays allowed; a first run, or any sign the name is in use, puts <name>-test first.
+test('deployment id: a first run, or a live Worker or private marker for the name, suggests <name>-test first', async t => {
+  const test = { value: 'alice-test', description: 'throwaway for testing; use alice when you migrate the live bridge' };
+  const first = await detect({ root: await root(t), run: machine().run, fetchImpl: machine().fetchImpl, env: {}, nodeVersion: '22.18.0' });
+  assert.equal(first.fields.deployment.value, 'alice-test', 'first run: the test id is the suggestion');
+  assert.deepEqual(first.fields.deployment.choices[0], test);
+  assert.equal(first.fields.deployment.choices[1].value, 'alice', 'the plain name is still offered');
+  assert.equal(first.fields.workerName.value, 'alice-test-bridge');
+
+  // Not a first run (another deployment exists): the plain name, unless something says it is in use.
+  const plain = await detect({ root: await root(t, ['example', 'team']), run: machine().run, fetchImpl: machine().fetchImpl, env: {}, nodeVersion: '22.18.0' });
+  assert.equal(plain.fields.deployment.value, 'alice');
+  assert.equal(plain.fields.deployment.choices[0].value, 'alice');
+
+  const live = machine({ workers: ['alice-bridge'] });
+  const worker = await detect({ root: await root(t, ['example', 'team']), run: live.run, fetchImpl: live.fetchImpl, env: {}, nodeVersion: '22.18.0' });
+  assert.deepEqual(worker.fields.deployment.choices[0], test, 'a Worker named alice-bridge is live');
+
+  const dir = await root(t, ['example', 'team']);
+  await mkdir(path.join(dir, '.private/deployments/alice'), { recursive: true });
+  const marked = await detect({ root: dir, run: machine().run, fetchImpl: machine().fetchImpl, env: {}, nodeVersion: '22.18.0' });
+  assert.deepEqual(marked.fields.deployment.choices[0], test, '.private/deployments/alice marks the live id');
+
+  // An id the person already gave is never replaced.
+  const given = await detect({ root: await root(t), run: machine().run, fetchImpl: machine().fetchImpl, env: {}, nodeVersion: '22.18.0', answers: { deployment: 'alice' } });
+  assert.equal(given.fields.deployment.value, 'alice');
 });

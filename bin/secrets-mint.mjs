@@ -9,7 +9,11 @@
 //   - minted through the Cloudflare API: CLOUDFLARE_API_TOKEN, "Workers Editor" scoped to this Worker (account scope
 //     if the API refuses that), 90-day expiry, named github-actions-<worker>-deploy;
 //   - asked (masked) or read from an env var of the same name: values issued elsewhere (account ID, Access secret,
-//     email map, routines, config PAT). Enter, or an unset env var, skips one; nothing is written for it.
+//     email map, routines, config PAT), only those this config uses or the file already has. Enter, or an unset env
+//     var, skips one; nothing is written for it.
+// The order a person sees: a one-line plan ("Will mint: ..., generate: ..., ask for: ..."), the minter prompt, then
+// "minted CLOUDFLARE_API_TOKEN (90 days)", the generated key names, and only then the values issued elsewhere, each
+// with its one-line "where this comes from". Env values are checked before anything is minted.
 // A re-run rotates everything it generates or mints (y/N on a terminal, --yes otherwise) and keeps values issued
 // elsewhere unless --rotate-all. --dry-run prints the plan and mints and writes nothing. No value is ever printed:
 // every line goes through the redactor. Exit 0 done, 2 waiting for --yes, 1 error.
@@ -107,50 +111,78 @@ export async function mintSecrets({
       for (const [key, source] of plan) say(`  ${key}: ${source}`);
       return 0;
     }
+    // The order a person sees: what will happen, the minter, the minted and generated names, then values issued elsewhere.
+    const toAsk = external.filter(f => f.key !== 'cloudflare.accountId' && !keep(f) && !given(f) && askFor(f));
+    say(`Will mint: CLOUDFLARE_API_TOKEN (90 days); generate: GOONBRIDGE_TOKENS (${members.join(', ')}), GOONBRIDGE_GITHUB_WEBHOOK_SECRET; ask for: ${toAsk.length ? `${toAsk.map(f => f.key).join(', ')} (Enter skips)` : 'nothing else'}.`);
     if (rotating && !opts.yes) {
       const what = 'secrets.json already holds generated values. Rotate them (every member gets a new token and a new deploy token is minted)';
       if (!prompt) { say(`${what}? Re-run with --yes to rotate; nothing changed.`); return 2; }
       if (!/^y(es)?$/i.test(await prompt(`${what}? [y/N] `, { mask: false }))) { say('Nothing changed.'); return 0; }
     }
 
-    // Values issued elsewhere first, so a bad one fails before anything is minted.
+    // Values from env are checked first, so a bad one fails before anything is minted.
     const next = structuredClone(existing ?? {});
     const report = [];
+    const fromEnv = new Map();
     for (const f of external) {
-      if (keep(f)) { report.push([f.key, 'kept']); continue; }
-      let value;
-      if (given(f)) {
-        try { value = await parseField(f, env[f.env], next); } catch (e) { throw new Error(`${f.env}: ${e.message}`); }
-      } else if (askFor(f) || (prompt && f.key === 'cloudflare.accountId')) {
-        say(`${f.key}: ${f.description}${f.needed ? ' (this deployment uses it)' : ''}`);
-        for (;;) {
-          const text = await prompt(`  ${f.key} (Enter skips): `, { mask: f.secret });
-          if (!text) break;
-          hide(text);
-          try { value = await parseField(f, text, next); break; } catch (e) { warn(`  ${e.message}; try again`); }
-        }
-      }
-      if (value === undefined && f.key === 'cloudflare.accountId') throw new Error('CLOUDFLARE_ACCOUNT_ID: the Cloudflare account ID is needed to mint (set it, or run in a terminal)');
-      setKey(next, f.key, value);
-      hide(value);
-      report.push([f.key, value === undefined ? 'skipped' : given(f) ? 'set from env' : 'prompted']);
+      if (keep(f) || !given(f)) continue;
+      try { fromEnv.set(f.key, await parseField(f, env[f.env], next)); } catch (e) { throw new Error(`${f.env}: ${e.message}`); }
+      hide(fromEnv.get(f.key));
     }
+    const askOne = async f => {
+      say(`${f.key}: ${f.description}${f.needed ? ' (this deployment uses it)' : ''}`);
+      for (;;) {
+        const text = await prompt(`  ${f.key} (Enter skips): `, { mask: f.secret });
+        if (!text) return undefined;
+        hide(text);
+        try { return await parseField(f, text, next); } catch (e) { warn(`  ${e.message}; try again`); }
+      }
+    };
 
+    // 1. The minter.
+    if (!env.CHIMERA_TOKEN_MINTER && prompt) say('The minter is your master token: a Cloudflare account API token with only "API Tokens: Edit". It is used once to mint the deploy token and is never stored.');
     const minter = env.CHIMERA_TOKEN_MINTER || (prompt ? await prompt('Minter token (Cloudflare account token with only "API Tokens: Edit"): ', { mask: true }) : '');
     if (!minter) throw new Error('no minter token: set CHIMERA_TOKEN_MINTER or run in a terminal. It is an account API token with only "API Tokens: Edit".');
     hide(minter);
+    // The account the deploy token belongs to: kept, from env, or asked now (it is needed to mint).
+    const account = external.find(f => f.key === 'cloudflare.accountId');
+    if (!keep(account)) {
+      const value = fromEnv.get(account.key) ?? (prompt ? await askOne(account) : undefined);
+      if (value === undefined) throw new Error('CLOUDFLARE_ACCOUNT_ID: the Cloudflare account ID is needed to mint (set it, or run in a terminal)');
+      setKey(next, account.key, value);
+      hide(value);
+      report.push([account.key, fromEnv.has(account.key) ? 'set from env' : 'prompted']);
+    } else report.push([account.key, 'kept']);
+
+    // 2. The deploy token.
     const accountId = getKey(next, 'cloudflare.accountId');
     const minted = await mintDeployToken({ fetchImpl, minter, accountId, worker: config.cloudflare.workerName, now });
     hide(minted.value);
+    next.CLOUDFLARE_API_TOKEN = minted.value;
+    say('minted CLOUDFLARE_API_TOKEN (90 days)');
 
+    // 3. Generated here.
     const tokens = Object.fromEntries(members.map(m => [m, randomSecret()]));
     hide(tokens);
     next.GOONBRIDGE_TOKENS = tokens;
+    for (const m of members) say(`generated GOONBRIDGE_TOKENS.${m}`);
     next.GOONBRIDGE_GITHUB_WEBHOOK_SECRET = randomSecret();
     hide(next.GOONBRIDGE_GITHUB_WEBHOOK_SECRET);
-    next.CLOUDFLARE_API_TOKEN = minted.value;
+    say('generated GOONBRIDGE_GITHUB_WEBHOOK_SECRET');
     next.contractToken = contract;
-    try { await writeSecrets(file, next); } catch { throw new Error(`could not write secrets.json; the deploy token ${minted.name} exists in Cloudflare, revoke it there`); }
+    const save = async () => { try { await writeSecrets(file, next); } catch { throw new Error(`could not write secrets.json; the deploy token ${minted.name} exists in Cloudflare, revoke it there`); } };
+    await save();
+
+    // 4. Values issued elsewhere, only the ones this config uses (or the file already has).
+    for (const f of external) {
+      if (f.key === 'cloudflare.accountId') continue;
+      if (keep(f)) { report.push([f.key, 'kept']); continue; }
+      const value = fromEnv.has(f.key) ? fromEnv.get(f.key) : askFor(f) ? await askOne(f) : undefined;
+      setKey(next, f.key, value);
+      hide(value);
+      report.push([f.key, value === undefined ? 'skipped' : fromEnv.has(f.key) ? 'set from env' : 'prompted']);
+    }
+    await save();
 
     say(`Wrote deployments/${deployment}/secrets.json (mode 0600, ignored by git). Values are not shown; they are in that file.`);
     for (const [key, source] of [...plan.filter(([k]) => GENERATED.includes(k)), ...report]) say(`  ${key}: ${source}`);

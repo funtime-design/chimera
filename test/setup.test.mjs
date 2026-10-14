@@ -179,7 +179,7 @@ test('person names are checked: no dash, never reused, and nothing is written', 
   assert.ok(!await exists(path.join(root, 'deployments/acme')), 'no files written for bad answers');
   const noTty = await runSetup(root, []);
   assert.equal(noTty.code, 2, noTty.text);
-  assert.match(noTty.text, /needs-answer\): access, admins, origin$/m);
+  assert.match(noTty.text, /needs-answer\): admins, origin$/m);
 });
 
 test('on a terminal it asks, re-asking for a dashed or reused name', async t => {
@@ -302,9 +302,8 @@ test('step 0 and detection: partial answers exit 2 listing exactly the missing f
   const r = await runSetup(root, ['--answers', await answersFile(root, { deployment: 'acme', admins: [{ name: 'alice', email: EMAIL.alice }] })]);
   assert.equal(r.code, 2, r.text);
   assert.match(r.text, /Step 0: checking what you have/);
-  assert.match(r.text, /needs-answer\): access, origin$/m);
+  assert.match(r.text, /needs-answer\): origin$/m, 'access is not asked for: no answer means off');
   assert.match(r.text, /- origin: .*workers\.dev/);
-  assert.match(r.text, /- access: .*Cloudflare Access/);
   assert.ok(!await exists(path.join(root, 'deployments/acme')), 'nothing written while answers are missing');
   noSecrets(r.text, 'needs-answer');
   assert.ok(!r.text.includes(DETECT_TOKEN), 'detect token never printed');
@@ -378,4 +377,38 @@ test('a token pause shows the waiting line and the exact commands inside show ma
   const r = await runSetup(root, ['--answers', await answersFile(root, { deployment: 'acme', displayName: 'Acme', admins: [{ name: 'alice', email: EMAIL.alice }], origin: 'workers.dev', access: false })]);
   assert.equal(r.code, 2, r.text);
   assert.match(r.text, /--- show this ---\n\s*Result: waiting for the tokens[\s\S]*pnpm secrets:mint -- --deployment acme[\s\S]*https:\/\/dash\.cloudflare\.com\/profile\/api-tokens[\s\S]*--resume\n--- end ---/);
+});
+
+// A real run: the person picked "No, token sign-in only (simplest)", yet Access ended up on. Whatever form the answer
+// takes (boolean, the strings an agent may write, the option label itself, or no key at all), No means no Access block,
+// state access false, and secrets:mint never asks for ACCESS_CLIENT_SECRET. Only a yes turns it on.
+test('Access: No in any form (or no answer) writes no access block and records access false; Yes writes the block', async t => {
+  const cases = [
+    [false, false], ['no', false], ['false', false], ['No, token sign-in only (simplest)', false], [undefined, false],
+    [true, true], ['yes', true], ['Yes, it is already in front of this domain', true],
+  ];
+  for (const [value, on] of cases) {
+    const root = await sandbox(t);
+    const a = answers();
+    if (value === undefined) delete a.access; else a.access = value;
+    const r = await runSetup(root, ['--answers', await answersFile(root, a)]);
+    const label = `access ${JSON.stringify(value)}`;
+    assert.equal(r.code, 2, `${label}: pauses for the tokens\n${r.text}`);
+    const config = await read(root, 'deployments/acme/bridge.config.json');
+    assert.equal(!!config.access, on, `${label}: access block ${on ? 'present' : 'absent'}`);
+    const state = await stateClean(root);
+    assert.equal(state.access, on, `${label}: state access ${on}`);
+    const secrets = await read(root, 'deployments/acme/secrets.json');
+    assert.equal('ACCESS_CLIENT_SECRET' in secrets, on, `${label}: ACCESS_CLIENT_SECRET placeholder only with Access`);
+    assert.equal(/ACCESS_CLIENT_SECRET/.test(r.text), on, `${label}: the token pause names ACCESS_CLIENT_SECRET only with Access`);
+    if (!on) assert.doesNotMatch(r.text, /Access group/, `${label}: no Access step`);
+  }
+});
+
+test('Access: an answer that is neither yes nor no is refused, not guessed', async t => {
+  const root = await sandbox(t);
+  const r = await runSetup(root, ['--answers', await answersFile(root, answers({ access: 'maybe later' }))]);
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.text, /access: true, false/);
+  assert.ok(!await exists(path.join(root, 'deployments/acme')), 'nothing written');
 });
