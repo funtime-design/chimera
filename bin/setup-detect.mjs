@@ -61,7 +61,7 @@ export async function detect({ root = projectRoot, run = capture, fetchImpl = fe
   const chosen = accounts.find(a => a.id === answers.accountId) ?? accounts.find(a => a.name === answers.accountName) ?? (accounts.length === 1 ? accounts[0] : null);
 
   // Zones and the workers.dev subdomain, with the wrangler token (or an API token in the environment).
-  let zones = null, subdomain = null;
+  let zones = null, subdomain = null, workers = [];
   if (loggedIn || env.CLOUDFLARE_API_TOKEN) {
     let token = env.CLOUDFLARE_API_TOKEN || '';
     if (!token) { const t = json((await sh('npx', ['wrangler', 'auth', 'token', '--json'])).stdout); if (typeof t?.token === 'string') token = t.token; }
@@ -76,6 +76,7 @@ export async function detect({ root = projectRoot, run = capture, fetchImpl = fe
       const list = await api(`/zones?per_page=50&status=active${chosen ? `&account.id=${chosen.id}` : ''}`);
       if (Array.isArray(list)) zones = list.map(z => z?.name).filter(n => typeof n === 'string').sort();
       if (chosen) subdomain = (await api(`/accounts/${chosen.id}/workers/subdomain`))?.subdomain ?? null;
+      if (chosen) workers = ((await api(`/accounts/${chosen.id}/workers/scripts`)) ?? []).map(w => w?.id).filter(n => typeof n === 'string');
     }
     token = '';
   }
@@ -91,7 +92,18 @@ export async function detect({ root = projectRoot, run = capture, fetchImpl = fe
   const person = slug(name.split(/\s+/)[0]) || slug(email.split('@')[0]) || '';
   let suggested = person || slug(zones?.[0]?.split('.')[0]) || 'mybridge';
   if (!ID.test(suggested) || RESERVED.has(suggested) || existing.includes(suggested)) suggested = `${suggested || 'my'}bridge`;
-  const deployment = answers.deployment ?? suggested;
+  // A first run is usually a throwaway; the plain name tends to be the live bridge's id (and its GOONBRIDGE_TOKENS
+  // entry). So on a first run, or when a live Worker or a .private/deployments/<name> folder says the name is in use,
+  // <name>-test is offered first. The plain name stays a choice.
+  const firstRun = !existing.some(d => !RESERVED.has(d)) && !inProgress.length;
+  const privateIds = new Set((await list('.private/deployments')).filter(d => d.isDirectory()).map(d => d.name));
+  const inUse = id => workers.includes(id) || workers.includes(`${id}-bridge`) || privateIds.has(id);
+  const testFirst = ID.test(suggested) && (inUse(suggested) || (firstRun && suggested === person)) && !existing.includes(`${suggested}-test`);
+  const choices = testFirst
+    ? [{ value: `${suggested}-test`, description: `throwaway for testing; use ${suggested} when you migrate the live bridge` },
+      { value: suggested, description: inUse(suggested) ? 'the id that looks in use (a live Worker or a private deployment); pick it to set up that bridge' : 'your own name; best kept for your real, long-lived bridge' }]
+    : [{ value: suggested, description: 'suggested from your git name or your domain' }];
+  const deployment = answers.deployment ?? choices[0].value;
   const firstName = name.split(/\s+/)[0];
   const originChoices = [...(zones ?? []).map(z => `https://bridge.${z}`), 'workers.dev'];
 
@@ -113,7 +125,7 @@ export async function detect({ root = projectRoot, run = capture, fetchImpl = fe
     zones: field(zones, zones ? 'detected' : 'needs-answer', zones
       ? 'Domains on this Cloudflare account (dashboard > Websites).'
       : 'Could not list your domains; log in with `npx wrangler login`, or check the Cloudflare dashboard > Websites (https://dash.cloudflare.com).'),
-    deployment: field(deployment, answers.deployment ? 'detected' : 'default', 'A short lowercase name for this bridge; it becomes the folder deployments/<id>/ (letters, digits, dash).'),
+    deployment: field(deployment, answers.deployment ? 'detected' : 'default', 'A short lowercase name for this bridge; it becomes the folder deployments/<id>/ (letters, digits, dash).', { choices }),
     displayName: field(firstName ? `${firstName}'s bridge` : `${deployment} bridge`, 'default', 'The name people see for the bridge; any text.'),
     origin: originChoices.length === 1 && subdomain
       ? field('workers.dev', 'default', `No domain on this account, so the bridge uses a free address: https://${deployment}-bridge.${subdomain}.workers.dev.`, { choices: originChoices })
@@ -123,7 +135,7 @@ export async function detect({ root = projectRoot, run = capture, fetchImpl = fe
       ? field([{ name: person, email }], 'detected', 'From `git config user.name` and `git config user.email`; an admin opens the status and settings pages.')
       : field(null, 'needs-answer', 'Your name (lowercase, no dash) and the email you sign in with; set a default with `git config --global user.email you@example.com`.'),
     members: field([], 'default', 'Other people who use the bridge: a name (lowercase, no dash) and sign-in email each; none is fine to start.'),
-    access: field(null, 'needs-answer', 'Cloudflare Access is a sign-in screen Cloudflare can put in front of a site (Zero Trust > Access > Applications at https://one.dash.cloudflare.com); without it people sign in with a token.'),
+    access: field(false, 'default', 'Cloudflare Access is a sign-in screen Cloudflare can put in front of a site (Zero Trust > Access > Applications at https://one.dash.cloudflare.com); without it people sign in with a token. Off unless the answer is true.'),
     githubActions: field(ghLoggedIn, 'default', ghLoggedIn ? 'gh is logged in, so setup also copies the deploy secrets to GitHub Actions.' : 'gh is not logged in, so setup skips the GitHub Actions secrets; run `gh auth login` to include them.'),
     existingDeployments: field(existing, 'detected', 'Folders under deployments/.'),
     setupInProgress: field(inProgress, 'detected', 'Saved progress in .chimera-setup/; resume with `pnpm run setup -- --deployment <id> --resume`.'),
@@ -139,7 +151,18 @@ export function publicView(report) {
 }
 
 // Answers file first, detection for the rest. Returns the merged answers and the fields still needing a person.
-const REQUIRED = ['deployment', 'displayName', 'origin', 'accountId', 'workerName', 'admins', 'access'];
+const REQUIRED = ['deployment', 'displayName', 'origin', 'accountId', 'workerName', 'admins'];
+// The Access answer as a boolean (or the { enabled, groupId } object). Off unless the answer clearly says yes: a missing
+// key, false, null, "no", "false" or the "No, token sign-in only" option label are all off. Anything else is left as
+// given, so checkAnswers refuses it instead of guessing.
+export function accessAnswer(v) {
+  if (v === undefined || v === null || v === '') return false;
+  if (typeof v !== 'string') return v;
+  const t = v.trim().toLowerCase();
+  if (/^(no|n|false|off)\b/.test(t)) return false;
+  if (/^(yes|y|true|on)\b/.test(t)) return true;
+  return v;
+}
 export function mergeAnswers(given = {}, report) {
   const f = report.fields;
   const a = { ...given };
@@ -153,6 +176,7 @@ export function mergeAnswers(given = {}, report) {
   a.admins ??= pick('admins');
   a.members ??= pick('members') ?? [];
   a.origin ??= pick('origin');
+  a.access = accessAnswer(a.access);
   if (a.githubActions === undefined) a.githubActions = !!f.githubActions?.value;
   if (a.origin === 'workers.dev') {
     const sub = a.workersDevSubdomain ?? report.workersSubdomain;

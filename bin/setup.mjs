@@ -28,7 +28,7 @@ import { checkAfterDeploy } from './contract-check.mjs';
 import { makeRedactor } from './secrets-common.mjs';
 import { mintSecrets } from './secrets-mint.mjs';
 import { buildResponder } from './build-responder.mjs';
-import { STATE_DIR, capture, detect, formatPrereqs, howToGet, mergeAnswers, prereqs, prereqsOk, publicView } from './setup-detect.mjs';
+import { STATE_DIR, accessAnswer, capture, detect, formatPrereqs, howToGet, mergeAnswers, prereqs, prereqsOk, publicView } from './setup-detect.mjs';
 
 export { STATE_DIR };
 const ID = /^[a-z0-9][a-z0-9_-]*$/;
@@ -157,6 +157,7 @@ export async function setup({
       try { answers = JSON.parse(await readFile(path.resolve(opts.answers), 'utf8')); } catch { throw new Error('--answers: file missing or not valid JSON (contents not shown)'); }
     }
     if (answers?.accountId) hide(answers.accountId);
+    if (answers) answers.access = accessAnswer(answers.access);
     const id = opts.deployment ?? answers?.deployment ?? (opts.resume ? await onlyState(root) : null);
     if (opts.deployment && answers?.deployment && answers.deployment !== opts.deployment) throw new Error('--deployment and the answers file name different deployments');
     const stateFile = id && ID.test(id) ? path.join(root, STATE_DIR, `${id}.json`) : null;

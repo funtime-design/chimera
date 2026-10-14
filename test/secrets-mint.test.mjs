@@ -9,7 +9,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile, access } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { mintSecrets } from '../bin/secrets-mint.mjs';
-import { configFrom } from '../bin/setup.mjs';
+import { configFrom, secretsFrom } from '../bin/setup.mjs';
 import { engineTemplate, identityOf } from '../bin/deployment.mjs';
 import { pushSecrets } from '../bin/secrets-push.mjs';
 
@@ -254,4 +254,45 @@ test('no value is printed on any failure path, and nothing is written', async t 
   assert.equal(bad.code, 1);
   assert.match(bad.text, /invalid/);
   noLeak(bad.text, 'bad config');
+});
+
+// A real run asked for ACCESS_CLIENT_SECRET before anything else. The order is: a short plan, the minter (masked, with
+// one line saying what it is), the minted deploy token, the generated names, and only then the values issued elsewhere.
+async function ordered(t, a) {
+  const root = await sandbox(t, a);
+  await writeFile(file(root), JSON.stringify(secretsFrom(a)));
+  const events = [];
+  const ask = async (prompt, { mask = false } = {}) => {
+    events.push(`ASK${mask ? '*' : ''} ${prompt.trim()}`);
+    return /minter/i.test(prompt) ? SECRET.minter : '';
+  };
+  const { code, text } = await run(root, [], { isTTY: true, ask, env: {}, out: l => events.push(l), err: l => events.push(l) });
+  return { code, text: events.join('\n'), events, root };
+}
+const at = (events, re) => { const i = events.findIndex(e => re.test(e)); assert.ok(i >= 0, `missing ${re}:\n${events.join('\n')}`); return i; };
+
+test('on a terminal: plan, then the minter, then minted and generated names, and only then external values', async t => {
+  const { code, events, text, root } = await ordered(t, answers({ access: true }));
+  assert.equal(code, 0, text);
+  const plan = at(events, /^Will mint: CLOUDFLARE_API_TOKEN.*generate: GOONBRIDGE_TOKENS.*GOONBRIDGE_GITHUB_WEBHOOK_SECRET.*ask for: ACCESS_CLIENT_SECRET/);
+  const what = at(events, /^The minter is/);
+  const minter = at(events, /^ASK\* Minter token/);
+  const minted = at(events, /^minted CLOUDFLARE_API_TOKEN \(90 days\)$/);
+  const alice = at(events, /^generated GOONBRIDGE_TOKENS\.alice$/), bob = at(events, /^generated GOONBRIDGE_TOKENS\.bob$/);
+  const hook = at(events, /^generated GOONBRIDGE_GITHUB_WEBHOOK_SECRET$/);
+  const where = at(events, /^ACCESS_CLIENT_SECRET: .*\S/);
+  const external = at(events, /^ASK\* ACCESS_CLIENT_SECRET/);
+  assert.equal(events.findIndex(e => e.startsWith('ASK')), minter, 'the minter is the first prompt');
+  for (const [a, b, why] of [[plan, what, 'plan first'], [what, minter, 'what the minter is, then its prompt'], [minter, minted, 'minter before minting'],
+    [minted, alice, 'minted before generated'], [alice, bob, 'members in order'], [bob, hook, 'webhook after members'], [hook, where, 'generated before externals'], [where, external, 'where it comes from, then the prompt']]) assert.ok(a < b, why);
+  assert.match(events[external], /Enter skips/);
+  noLeak(text, 'ordered', generatedValues(await read(root)));
+});
+
+test('Access off: secrets:mint never mentions or asks for ACCESS_CLIENT_SECRET', async t => {
+  const { code, events, text } = await ordered(t, answers({ access: false }));
+  assert.equal(code, 0, text);
+  assert.ok(!events.some(e => /^ASK.*ACCESS_CLIENT_SECRET/.test(e)), 'no Access prompt');
+  assert.doesNotMatch(events[at(events, /^Will mint:/)], /ACCESS_CLIENT_SECRET/);
+  assert.doesNotMatch(text, /ACCESS_CLIENT_SECRET.*this deployment uses it/);
 });

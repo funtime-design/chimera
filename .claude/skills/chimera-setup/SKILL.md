@@ -82,9 +82,12 @@ The answer goes in `accountName`.
 ### Q2. Deployment id
 
 AskUserQuestion, header "Name", question "What short name should this bridge have? It becomes the folder deployments/<name>/."
-Options:
-- **<fields.deployment.value>**: suggested from your git name (or your domain); lowercase, used in file and Worker names.
+Options: in the order of `fields.deployment.choices` (each choice's `value` is the label, its `description` the description).
+- **<choices[0].value>**: <choices[0].description>. On a first run, or when the name looks in use (a live Worker, or `.private/deployments/<name>`), this is `<name>-test`: "throwaway for testing; use <name> when you migrate the live bridge".
+- **<choices[1].value>**: <choices[1].description> (only when there is a second choice; usually the plain name).
 - **Something else**: type a name with lowercase letters, digits or dashes (choose Other).
+
+Never drop the plain name, and never reorder: the test id comes first so a first try does not take the live bridge's id.
 
 ### Q3. Domain
 
@@ -118,7 +121,9 @@ Options:
 - **No, token sign-in only (simplest)**: each person gets a private token; nothing else to set up. You can add Access later.
 - **Yes, it is already in front of this domain**: you already set Access up at https://one.dash.cloudflare.com > Access > Applications; setup lists who to add to the Access group.
 
-The answer goes in `access` (false or true).
+The answer goes in `access` as a JSON boolean: **No** writes `"access": false`, **Yes** writes `"access": true`. Never a string, never the option label. Leaving the key out also means no Access.
+
+If the person asks what this means instead of picking, explain in one or two sentences, then ask Q6 again with the same two options, word for word. Do not reword an option (a reworded "Yes" invites a yes the person did not mean). Echo the answer in Q9 as "Access: no" or "Access: yes".
 
 ### Q7. More people
 
