@@ -34,7 +34,8 @@ test('the prescribed questions are all there', () => {
   assert.match(skill, /- \*\*Email code via Cloudflare Access \(recommended; setup creates it for you\)\*\*: /);
   assert.match(skill, /- \*\*I already have an Access app, use it \(paste its client id when asked\)\*\*: /);
   assert.match(skill, /https:\/\/dash\.cloudflare\.com\/profile\/api-tokens/);
-  assert.match(skill, /API Tokens: Edit/);
+  assert.match(skill, /docs\/guides\/master-token\.md/, 'the token steps come from the guide');
+  assert.doesNotMatch(skill, /Create Custom Token/, 'no second copy of the token steps in the skill');
   assert.match(skill, /pnpm secrets:mint -- --deployment/);
   assert.match(skill, /npx wrangler login/);
 });
@@ -75,6 +76,7 @@ test('--token-steps prints 6 numbered steps with the dashboard URL', () => {
   assert.equal(numbered.length, 6, out);
   assert.deepEqual(numbered.map(l => l.split('.')[0]), ['1', '2', '3', '4', '5', '6']);
   assert.ok(numbered.some(l => l.includes('https://dash.cloudflare.com/profile/api-tokens')), out);
+  assert.match(out, /^   Screenshot: docs\/images\/master-token-1\.png$/m, 'with the screenshot to open');
   assert.match(out, /^--- show this ---$/m);
   assert.match(out, /^--- end ---$/m);
 });

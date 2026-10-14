@@ -23,6 +23,7 @@
 // Policies Edit" and "Access: Organizations, Identity Providers, and Groups Edit". The deploy token cannot do this.
 // --dry-run reads but creates, changes and writes nothing. Exit 0 done, 2 waiting for a person, 1 error. No secret value
 // (token, account ID, client secret) and no email is ever printed; errors carry an HTTP status, never a response body.
+import { guideHeading, guideLines } from './guides.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { cli, deploymentDir, isMain, loadDeployment, projectRoot, requirePrivateSecrets } from './deployment.mjs';
@@ -140,9 +141,9 @@ export async function provisionAccess({
     if (!authDomain) {
       say([SHOW,
         'Cloudflare Access is not turned on for this Cloudflare account yet. This is a one-time step in the dashboard:',
-        `  1. Open ${ZERO_TRUST_URL} and pick this account.`,
-        '  2. Choose a team name (it becomes <team>.cloudflareaccess.com) and the Free plan (up to 50 people; no charge).',
-        `  3. Then run: ${rerun}`, SHOW_END].join('\n'));
+        `  ${guideHeading('zero-trust-enable')}`,
+        ...guideLines('zero-trust-enable').map(l => `    ${l}`),
+        `  Then run: ${rerun}`, SHOW_END].join('\n'));
       return 2;
     }
     say(`${tool}${dry ? ' (dry run: nothing is created, changed or written)' : ''}: Cloudflare Access is on (team ${authDomain}).`);
